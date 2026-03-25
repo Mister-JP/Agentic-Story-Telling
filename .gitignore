@@ -1,0 +1,39 @@
+# Playwright / automation output
+output/
+.playwright-cli/
+
+# Jupyter
+**/.ipynb_checkpoints/
+
+# Secrets and local env (use env vars or a secrets manager)
+.env
+.env.*
+!.env.example
+nemokey.txt
+openrouterkey.txt
+
+# Frontend
+frontend/editor-app/node_modules/
+frontend/editor-app/dist/
+frontend/editor-app/dist-ssr/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+*.swo
