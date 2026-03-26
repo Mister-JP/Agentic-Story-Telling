@@ -16,9 +16,10 @@ import App from '../../src/App.jsx'
 // ── Stubs ─────────────────────────────────────────────────────────────────
 
 // Avoid importOriginal(): loading the full @mantine/hooks barrel is slow and can stall workers.
-// App only needs useLocalStorage returning [value, setter].
+// App calls useLocalStorage three times (workspace, worldModel, syncState).
+// Return the correct default value for each key.
 vi.mock('@mantine/hooks', () => ({
-  useLocalStorage: vi.fn(() => [initialTree, vi.fn()]),
+  useLocalStorage: vi.fn(({ key, defaultValue }) => [defaultValue, vi.fn()]),
 }))
 
 // browser-fs-access tries to open native file pickers — stub them out.

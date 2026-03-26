@@ -67,6 +67,7 @@ function Topbar({
   selectedPathNames,
   selectionMode,
   selectedNode,
+  syncBadgeProps,
 }) {
   const headerCopy = getHeaderCopy(selectionMode, selectedNode, selectedPathNames)
   const statusLabel = getStatusLabel(projectAction, selectionMode, selectedNode)
@@ -115,6 +116,17 @@ function Topbar({
           <Badge className="topbar-status-pill" variant="light">
             {statusLabel}
           </Badge>
+
+          {syncBadgeProps ? (
+            <Badge
+              className="topbar-sync-pill"
+              color={syncBadgeProps.color}
+              data-testid="sync-status-badge"
+              variant="light"
+            >
+              {syncBadgeProps.label}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -137,6 +149,10 @@ Topbar.propTypes = {
   selectedPathNames: PropTypes.arrayOf(PropTypes.string).isRequired,
   selectionMode: PropTypes.oneOf(['empty', 'file', 'folder']).isRequired,
   selectedNode: nodeShape.isRequired,
+  syncBadgeProps: PropTypes.shape({
+    label: PropTypes.string.isRequired,
+    color: PropTypes.string.isRequired,
+  }),
 }
 
 export default Topbar

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import EditorPane from './components/EditorPane.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import Topbar from './components/Topbar.jsx'
+import { getSyncBadgeProps } from './utils/syncSelectors.js'
 import WorkspaceDialog from './components/WorkspaceDialog.jsx'
 import {
   DEFAULT_FILE_ID,
@@ -70,11 +71,32 @@ function getPathNodes(workspace, selectedId) {
     .filter(Boolean)
 }
 
+const INITIAL_SYNC_STATE = {
+  status: 'never_synced',
+  lastSyncedAt: null,
+  lastSyncedSnapshot: {},
+}
+
 function App() {
   const [workspace, setWorkspace] = useLocalStorage({
     key: 'editor-app-workspace-v1',
     defaultValue: initialTree,
   })
+
+  const [worldModel, setWorldModel] = useLocalStorage({
+    key: 'editor-app-world-model-v1',
+    defaultValue: null,
+  })
+
+  const [syncState, setSyncState] = useLocalStorage({
+    key: 'editor-app-sync-state-v1',
+    defaultValue: INITIAL_SYNC_STATE,
+  })
+
+  const syncBadgeProps = useMemo(
+    () => getSyncBadgeProps(syncState, workspace),
+    [syncState, workspace],
+  )
   const [dialogAction, setDialogAction] = useState(null)
   const [dialogTargetId, setDialogTargetId] = useState(null)
   const [dialogDraftName, setDialogDraftName] = useState('')
@@ -444,6 +466,7 @@ function App() {
             selectedPathNames={selectedPathNames}
             selectionMode={selectionMode}
             selectedNode={selectedNode}
+            syncBadgeProps={syncBadgeProps}
             targetFolder={targetFolder}
             onOpenDialog={openDialog}
           />

@@ -199,3 +199,47 @@ export function assembleCombinedDiff(
 
   return diffParts.join('\n');
 }
+
+// ── Snapshot update after sync ───────────────────────────────────────────
+
+/**
+ * Build an updated snapshot after a partial sync completes.
+ *
+ * Only files included in `selectedFileIds` are refreshed from the current
+ * snapshot. Files that no longer exist in `currentSnapshot` (deleted files)
+ * are removed. Unselected files retain their previous snapshot values so
+ * they continue to appear as "changed" in the next sync.
+ *
+ * @param {Record<string, object>} previousSnapshot   Snapshot from syncState.lastSyncedSnapshot.
+ * @param {Record<string, object>} currentSnapshot    Snapshot of current workspace (from createContentSnapshot).
+ * @param {string[]}               selectedFileIds    File IDs that were included in this sync.
+ * @returns {Record<string, object>}  Merged snapshot to store as the new lastSyncedSnapshot.
+ */
+export function updateSnapshotAfterSync(
+  previousSnapshot,
+  currentSnapshot,
+  selectedFileIds,
+) {
+  const safePrevious = previousSnapshot ?? {};
+  const safeCurrent = currentSnapshot ?? {};
+  const safeSelected = Array.isArray(selectedFileIds) ? selectedFileIds : [];
+
+  const updatedSnapshot = { ...safePrevious };
+
+  // Overwrite snapshot entries for each synced file
+  const selectedSet = new Set(safeSelected);
+  for (const fileId of selectedSet) {
+    if (fileId in safeCurrent) {
+      updatedSnapshot[fileId] = safeCurrent[fileId];
+    }
+  }
+
+  // Remove entries for files that no longer exist in the workspace
+  for (const fileId of Object.keys(updatedSnapshot)) {
+    if (!(fileId in safeCurrent)) {
+      delete updatedSnapshot[fileId];
+    }
+  }
+
+  return updatedSnapshot;
+}

@@ -5,6 +5,7 @@ import {
   getChangedFiles,
   computeFileDiff,
   assembleCombinedDiff,
+  updateSnapshotAfterSync,
 } from '../../src/utils/diffEngine.js';
 import {
   WORKSPACE_TWO_FILES,
@@ -319,5 +320,67 @@ describe('assembleCombinedDiff', () => {
     expect(combined).toContain('-');
     expect(combined).toContain('+');
     expect(combined).toContain('Saint Alder Chapel');
+  });
+});
+
+// ── updateSnapshotAfterSync ─────────────────────────────────────────────
+
+describe('updateSnapshotAfterSync', () => {
+  it('updates only selected files in the snapshot', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const modified = createContentSnapshot(WORKSPACE_TWO_FILES_MODIFIED);
+
+    const result = updateSnapshotAfterSync(baseline, modified, ['chapter-07']);
+
+    // chapter-07 should have the modified content
+    expect(result['chapter-07'].markdown).toContain('Saint Alder Chapel');
+
+    // chapter-08 should retain the original (unselected)
+    expect(result['chapter-08'].markdown).not.toContain('bundle');
+    expect(result['chapter-08'].markdown).toContain('Morning light');
+  });
+
+  it('retains unselected files at their previous snapshot values', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const modified = createContentSnapshot(WORKSPACE_TWO_FILES_MODIFIED);
+
+    const result = updateSnapshotAfterSync(baseline, modified, ['chapter-08']);
+
+    // chapter-07 should still have the old content
+    expect(result['chapter-07'].markdown).toContain('walked to the chapel');
+    expect(result['chapter-07'].markdown).not.toContain('Saint Alder');
+  });
+
+  it('removes entries for files that no longer exist in the workspace', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const withDeletedFile = createContentSnapshot(WORKSPACE_WITH_ADDED_AND_DELETED);
+
+    const result = updateSnapshotAfterSync(baseline, withDeletedFile, ['chapter-07']);
+
+    // chapter-08 was in the baseline but deleted from the workspace
+    expect(result).not.toHaveProperty('chapter-08');
+
+    // chapter-09 was added but not selected — should NOT appear
+    expect(result).not.toHaveProperty('chapter-09');
+  });
+
+  it('adds selected new files to the snapshot', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const withNewFile = createContentSnapshot(WORKSPACE_WITH_ADDED_AND_DELETED);
+
+    const result = updateSnapshotAfterSync(baseline, withNewFile, ['chapter-09']);
+
+    expect(result).toHaveProperty('chapter-09');
+    expect(result['chapter-09'].markdown).toContain('new chapter');
+  });
+
+  it('handles null inputs gracefully', () => {
+    const current = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const allFileIds = Object.keys(current);
+
+    // null previous + all files selected → result equals current snapshot
+    expect(updateSnapshotAfterSync(null, current, allFileIds)).toEqual(current);
+    // all nulls → empty object
+    expect(updateSnapshotAfterSync(null, null, null)).toEqual({});
   });
 });
