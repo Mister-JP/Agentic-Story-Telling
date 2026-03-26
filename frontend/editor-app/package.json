@@ -13,7 +13,6 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
-
   "dependencies": {
     "@mantine/core": "^8.3.18",
     "@mantine/hooks": "^8.3.18",
@@ -21,10 +20,12 @@
     "@tiptap/react": "^3.20.4",
     "@tiptap/starter-kit": "^3.20.4",
     "browser-fs-access": "^0.38.0",
+    "diff": "^8.0.4",
     "jszip": "^3.10.1",
     "prop-types": "^15.8.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "turndown": "^7.2.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
