@@ -111,3 +111,7 @@ async function postJson(endpointPath, payload) {
 export async function proposeEventsIndex(payload) {
   return postJson('/harness/events-index/propose', payload)
 }
+
+export async function applyEventsIndex(payload) {
+  return postJson('/harness/events-index/apply', payload)
+}

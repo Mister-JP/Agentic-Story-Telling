@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from fastapi.testclient import TestClient
 
@@ -118,6 +119,55 @@ def test_all_stub_routes_return_successful_contract_shapes() -> None:
         assert response_key in response_body
 
 
+def test_events_index_propose_returns_stub_delta_with_diff_evidence() -> None:
+    client = build_client()
+
+    response = client.post("/harness/events-index/propose", json=build_events_index_propose_payload())
+    response_body = response.json()
+    proposal = response_body["proposal"]
+
+    assert response.status_code == 200
+    # This exact string is part of the deterministic stub contract; update the fixture and
+    # this assertion together if the stub copy changes intentionally.
+    assert proposal["scan_summary"] == "Stub mode analyzed the diff and returned a deterministic events proposal."
+    assert proposal["deltas"][0]["action"] == "create"
+    assert proposal["deltas"][0]["evidence_from_diff"] == ["She noticed the altar cloth."]
+
+
+def test_cors_preflight_allows_localhost_dev_ports() -> None:
+    client = build_client()
+
+    response = client.options(
+        "/harness/events-index/propose",
+        headers={
+            "Origin": "http://localhost:5175",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5175"
+    assert "GET" in response.headers["access-control-allow-methods"]
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_events_index_apply_returns_updated_index_and_new_detail_skeleton() -> None:
+    client = build_client()
+
+    response = client.post("/harness/events-index/apply", json=build_events_index_apply_payload())
+    response_body = response.json()
+    detail_files = response_body["detail_files"]
+    generated_event_uuids = list(detail_files)
+
+    assert response.status_code == 200
+    assert len(generated_event_uuids) == 1
+    assert generated_event_uuids[0].startswith("evt_")
+    assert generated_event_uuids[0] in response_body["events_md"]
+    assert detail_files[generated_event_uuids[0]].startswith("# Stubbed altar discovery event for contract integration")
+    assert "## Core Understanding" in detail_files[generated_event_uuids[0]]
+
+
 def test_element_detail_uses_target_kind_when_present() -> None:
     client = build_client()
     payload = build_detail_payload("element")
@@ -128,6 +178,41 @@ def test_element_detail_uses_target_kind_when_present() -> None:
 
     assert response.status_code == 200
     assert "- Type: person" in response_body["updated_detail_md"]
+
+
+def test_element_detail_uses_aliases_from_index_markdown() -> None:
+    client = build_client()
+    payload = build_detail_payload("element")
+    payload["target"]["uuid"] = "elt_stub123"
+    payload["target"]["summary"] = "Mira"
+    payload["elements_md"] = (
+        "# Elements\n\n## Entries\n"
+        "- person | Mira | elt_stub123 | Mira, Sister Mira | protagonist, chapel witness\n"
+    )
+
+    response = client.post("/harness/element-detail/propose", json=payload)
+    response_body = response.json()
+
+    assert response.status_code == 200
+    assert "- Aliases: Mira, Sister Mira" in response_body["updated_detail_md"]
+
+
+def test_event_detail_uses_when_and_chapters_from_index_markdown() -> None:
+    client = build_client()
+    payload = build_detail_payload("event")
+    payload["target"]["uuid"] = "evt_stub123"
+    payload["target"]["summary"] = "Mira sees the chapel light"
+    payload["events_md"] = (
+        "# Events\n\n## Entries\n"
+        "- evt_stub123 | June 28, 1998, 7:15 a.m. | Chapter 8 | Mira sees the chapel light\n"
+    )
+
+    response = client.post("/harness/event-detail/propose", json=payload)
+    response_body = response.json()
+
+    assert response.status_code == 200
+    assert "- When: June 28, 1998, 7:15 a.m." in response_body["updated_detail_md"]
+    assert "- Chapters: Chapter 8" in response_body["updated_detail_md"]
 
 
 def test_validation_errors_use_the_shared_error_envelope() -> None:
@@ -182,3 +267,17 @@ def test_shared_error_mapping_covers_retryable_and_non_retryable_failures() -> N
         assert response.status_code == expected_status_code
         assert response_body["error"] == expected_error_code
         assert response_body["retryable"] is expected_retryable
+
+
+def test_unexpected_errors_are_logged(caplog) -> None:
+    client = build_client(
+        service_override=FailingHarnessService(failure=RuntimeError("boom")),
+        raise_server_exceptions=False,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/harness/events-index/propose", json=build_events_index_propose_payload())
+
+    assert response.status_code == 500
+    assert any("Unhandled unexpected error while processing request." in message for message in caplog.messages)
+    assert any(record.exc_info for record in caplog.records)

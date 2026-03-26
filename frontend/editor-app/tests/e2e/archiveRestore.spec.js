@@ -1,6 +1,7 @@
 // @ts-check
 import { test, expect } from '@playwright/test'
 import { buildWorldModelFixture } from '../fixtures/worldModel.js'
+import { clickModeTab } from './support/modeTabs.js'
 
 const WORKSPACE_STORAGE_KEY = 'editor-app-workspace-v1'
 const WORLD_MODEL_STORAGE_KEY = 'editor-app-world-model-v1'
@@ -165,7 +166,7 @@ async function uploadProjectArchive(page) {
 }
 
 async function switchToWorldMode(page) {
-  await page.getByTestId('mode-tabs').getByText('World', { exact: true }).click()
+  await clickModeTab(page, 'World')
   await expect(page.getByTestId('world-sidebar')).toBeVisible()
 }
 

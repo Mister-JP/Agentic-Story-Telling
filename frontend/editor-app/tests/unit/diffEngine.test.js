@@ -162,6 +162,49 @@ describe('getChangedFiles', () => {
     expect(addedEntries[0].fileName).toBe('chapter-09.story');
   });
 
+  it('ignores newly added files whose markdown is empty', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const withEmptyAdded = createContentSnapshot({
+      ...WORKSPACE_TWO_FILES,
+      children: [
+        ...WORKSPACE_TWO_FILES.children,
+        {
+          id: 'empty-added-file',
+          name: 'scratch.story',
+          type: 'file',
+          content: '<p></p>',
+        },
+      ],
+    });
+    const changes = getChangedFiles(withEmptyAdded, baseline);
+
+    expect(changes.map(change => change.fileId)).not.toContain('empty-added-file');
+  });
+
+  it('ignores modified files whose markdown was cleared to empty', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const withClearedFile = createContentSnapshot({
+      ...WORKSPACE_TWO_FILES,
+      children: WORKSPACE_TWO_FILES.children.map((node) => {
+        if (node.id !== 'story-folder') {
+          return node;
+        }
+
+        return {
+          ...node,
+          children: node.children.map((child) => (
+            child.id === 'chapter-07'
+              ? { ...child, content: '<p></p>' }
+              : child
+          )),
+        };
+      }),
+    });
+    const changes = getChangedFiles(withClearedFile, baseline);
+
+    expect(changes.map(change => change.fileId)).not.toContain('chapter-07');
+  });
+
   it('detects deleted files that are in old snapshot but not current', () => {
     const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
     const withDeleted = createContentSnapshot(WORKSPACE_WITH_ADDED_AND_DELETED);

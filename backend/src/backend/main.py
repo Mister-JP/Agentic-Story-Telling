@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,10 +14,8 @@ from backend.routes.event_detail import router as event_detail_router
 from backend.routes.events_index import router as events_index_router
 from backend.schemas import ErrorResponse
 
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+LOCALHOST_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -29,7 +29,8 @@ def create_app() -> FastAPI:
 def configure_cors(app: FastAPI) -> None:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
+        allow_origins=[],
+        allow_origin_regex=LOCALHOST_ORIGIN_REGEX,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
@@ -68,7 +69,11 @@ def handle_request_validation_error(_, error: RequestValidationError) -> JSONRes
     return JSONResponse(status_code=422, content=error_response.model_dump())
 
 
-def handle_unexpected_error(_, __: Exception) -> JSONResponse:
+def handle_unexpected_error(_, error: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled unexpected error while processing request.",
+        exc_info=(type(error), error, error.__traceback__),
+    )
     internal_error = build_internal_error()
     error_response = ErrorResponse(
         error=internal_error.error,

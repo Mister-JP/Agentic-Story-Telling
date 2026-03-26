@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createContentSnapshot } from '../../src/utils/diffEngine.js'
 import {
-  buildEventsIndexProposePayload,
+  buildWorldSyncDraft,
   canStartWorldSync,
   getEventsIndexMarkdown,
   getWorldSyncButtonState,
@@ -21,8 +21,8 @@ describe('worldSync helpers', () => {
     expect(canStartSync).toBe(true)
   })
 
-  it('builds an events propose payload for first sync', () => {
-    const payload = buildEventsIndexProposePayload(
+  it('builds a world sync draft for first sync', () => {
+    const draft = buildWorldSyncDraft(
       WORKSPACE_TWO_FILES,
       {
         status: 'never_synced',
@@ -32,23 +32,23 @@ describe('worldSync helpers', () => {
       null,
     )
 
-    expect(payload.eventsMd).toBe('')
-    expect(payload.diffText).toContain('+++ b/story-structure/chapter-07.story')
-    expect(payload.diffText).toContain('+++ b/notes.story')
+    expect(draft.eventsMd).toBe('')
+    expect(draft.diffText).toContain('+++ b/story-structure/chapter-07.story')
+    expect(draft.diffText).toContain('+++ b/notes.story')
   })
 
-  it('builds an events propose payload from an existing world model', () => {
+  it('builds a world sync draft from an existing world model', () => {
     const worldModel = buildWorldModelFixture()
     const syncState = {
       status: 'synced',
       lastSyncedAt: '2026-03-25T12:00:00.000Z',
       lastSyncedSnapshot: createContentSnapshot(WORKSPACE_TWO_FILES),
     }
-    const payload = buildEventsIndexProposePayload(WORKSPACE_TWO_FILES_MODIFIED, syncState, worldModel)
+    const draft = buildWorldSyncDraft(WORKSPACE_TWO_FILES_MODIFIED, syncState, worldModel)
 
-    expect(payload.eventsMd).toContain('# Events')
-    expect(payload.eventsMd).toContain('evt_f72bc8fe0f29')
-    expect(payload.diffText).toContain('Saint Alder Chapel')
+    expect(draft.eventsMd).toContain('# Events')
+    expect(draft.eventsMd).toContain('evt_f72bc8fe0f29')
+    expect(draft.diffText).toContain('Saint Alder Chapel')
   })
 
   it('renders existing events markdown when a world model is present', () => {

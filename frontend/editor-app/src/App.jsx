@@ -1,16 +1,23 @@
 import { Box, Flex, useTree } from '@mantine/core'
 import { useLocalStorage } from '@mantine/hooks'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import EditorPane from './components/EditorPane.jsx'
 import Sidebar from './components/Sidebar.jsx'
+import SyncReviewPanel from './components/SyncReviewPanel.jsx'
 import Topbar from './components/Topbar.jsx'
 import WorldPanel from './components/WorldPanel.jsx'
-import { ApiClientError, proposeEventsIndex } from './utils/agentApi.js'
-import { getSyncBadgeProps } from './utils/syncSelectors.js'
 import {
-  buildEventsIndexProposePayload,
-  getWorldSyncButtonState,
-} from './utils/worldSync.js'
+  ApiClientError,
+  applyEventsIndex,
+  proposeEventsIndex,
+} from './utils/agentApi.js'
+import {
+  applyEventsIndexReviewResult,
+  createEventsIndexReviewSession,
+  createReviewHistoryEntry,
+} from './utils/syncReview.js'
+import { getSyncBadgeProps } from './utils/syncSelectors.js'
+import { getWorldSyncButtonState } from './utils/worldSync.js'
 import WorkspaceDialog from './components/WorkspaceDialog.jsx'
 import {
   DEFAULT_FILE_ID,
@@ -77,12 +84,6 @@ function getPathNodes(workspace, selectedId) {
     .filter(Boolean)
 }
 
-function buildWorldSyncSuccessMessage(proposal) {
-  const proposedDeltaCount = proposal?.deltas?.length ?? 0
-  const deltaLabel = proposedDeltaCount === 1 ? 'proposal' : 'proposals'
-  return `Backend contract reachable. Received ${proposedDeltaCount} stub event ${deltaLabel}.`
-}
-
 function getWorldSyncErrorMessage(error) {
   if (error instanceof ApiClientError) {
     return error.message
@@ -113,6 +114,17 @@ function App() {
     defaultValue: INITIAL_SYNC_STATE,
   })
   const [isWorldSyncLoading, setIsWorldSyncLoading] = useState(false)
+  const [reviewSession, setReviewSession] = useState(null)
+  const reviewGenerationRef = useRef(0)
+  const workspaceRef = useRef(workspace)
+  const worldModelRef = useRef(worldModel)
+  const syncStateRef = useRef(syncState)
+  const reviewSessionRef = useRef(reviewSession)
+
+  workspaceRef.current = workspace
+  worldModelRef.current = worldModel
+  syncStateRef.current = syncState
+  reviewSessionRef.current = reviewSession
 
   const syncBadgeProps = useMemo(
     () => getSyncBadgeProps(syncState, workspace),
@@ -378,7 +390,90 @@ function App() {
     setWorkspace((current) => updateFileContent(current, fileId, content))
   }
 
-  const handleStartWorldSync = async () => {
+  const requestEventsIndexProposal = useCallback(async ({ diffText, eventsMd, history }) => {
+    return proposeEventsIndex({
+      diff_text: diffText,
+      events_md: eventsMd,
+      history,
+    })
+  }, [])
+
+  const handleDiscardReview = useCallback(() => {
+    reviewGenerationRef.current += 1
+    setIsWorldSyncLoading(false)
+    setReviewSession(null)
+    setViewMode('world')
+  }, [])
+
+  const handleRetryEventsIndexProposal = useCallback(async () => {
+    const activeReviewSession = reviewSessionRef.current
+
+    if (!activeReviewSession) {
+      return
+    }
+
+    const reviewGeneration = reviewGenerationRef.current + 1
+    reviewGenerationRef.current = reviewGeneration
+
+    setReviewSession((current) => {
+      if (!current) {
+        return current
+      }
+
+      return {
+        ...current,
+        error: null,
+        isLoading: true,
+        loadingAction: 'proposal',
+      }
+    })
+
+    try {
+      const response = await requestEventsIndexProposal({
+        diffText: activeReviewSession.diffText,
+        eventsMd: activeReviewSession.eventsMd,
+        history: activeReviewSession.history,
+      })
+
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          attemptNumber: current.history.length + 1,
+          currentProposal: response.proposal,
+          error: null,
+          isLoading: false,
+          loadingAction: null,
+        }
+      })
+    } catch (error) {
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          error: getWorldSyncErrorMessage(error),
+          isLoading: false,
+          loadingAction: null,
+        }
+      })
+    }
+  }, [requestEventsIndexProposal])
+
+  const handleStartWorldSync = useCallback(async () => {
     if (isWorldSyncLoading) {
       return
     }
@@ -394,26 +489,213 @@ function App() {
     setProjectStatus(null)
     setIsWorldSyncLoading(true)
 
+    const reviewGeneration = reviewGenerationRef.current + 1
+    reviewGenerationRef.current = reviewGeneration
+    const nextReviewSession = createEventsIndexReviewSession(workspace, syncState, worldModel)
+    setReviewSession(nextReviewSession)
+    setViewMode('review')
+
     try {
-      const { diffText, eventsMd } = buildEventsIndexProposePayload(workspace, syncState, worldModel)
-      const response = await proposeEventsIndex({
-        diff_text: diffText,
-        events_md: eventsMd,
+      const response = await requestEventsIndexProposal({
+        diffText: nextReviewSession.diffText,
+        eventsMd: nextReviewSession.eventsMd,
         history: [],
       })
-      setProjectStatus({
-        kind: 'success',
-        message: buildWorldSyncSuccessMessage(response?.proposal),
+
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          attemptNumber: 1,
+          currentProposal: response.proposal,
+          error: null,
+          isLoading: false,
+          loadingAction: null,
+        }
       })
     } catch (error) {
-      setProjectStatus({
-        kind: 'error',
-        message: getWorldSyncErrorMessage(error),
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          error: getWorldSyncErrorMessage(error),
+          isLoading: false,
+          loadingAction: null,
+        }
       })
     } finally {
-      setIsWorldSyncLoading(false)
+      if (reviewGenerationRef.current === reviewGeneration) {
+        setIsWorldSyncLoading(false)
+      }
     }
-  }
+  }, [
+    isWorldSyncLoading,
+    requestEventsIndexProposal,
+    syncState,
+    worldModel,
+    workspace,
+    worldSyncButtonState.disabled,
+  ])
+
+  const handleRequestReviewChanges = useCallback(async (reviewerFeedback) => {
+    const activeReviewSession = reviewSessionRef.current
+
+    if (!activeReviewSession?.currentProposal) {
+      return
+    }
+
+    const nextHistory = [
+      ...activeReviewSession.history,
+      createReviewHistoryEntry(
+        activeReviewSession.currentProposal,
+        reviewerFeedback,
+        activeReviewSession.attemptNumber,
+      ),
+    ]
+
+    setReviewSession((current) => {
+      if (!current) {
+        return current
+      }
+
+      return {
+        ...current,
+        error: null,
+        isLoading: true,
+        loadingAction: 'request-changes',
+      }
+    })
+
+    const reviewGeneration = reviewGenerationRef.current + 1
+    reviewGenerationRef.current = reviewGeneration
+
+    try {
+      const response = await requestEventsIndexProposal({
+        diffText: activeReviewSession.diffText,
+        eventsMd: activeReviewSession.eventsMd,
+        history: nextHistory,
+      })
+
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          attemptNumber: nextHistory.length + 1,
+          currentProposal: response.proposal,
+          error: null,
+          history: nextHistory,
+          isLoading: false,
+          loadingAction: null,
+        }
+      })
+    } catch (error) {
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          error: getWorldSyncErrorMessage(error),
+          isLoading: false,
+          loadingAction: null,
+        }
+      })
+    }
+  }, [requestEventsIndexProposal])
+
+  const handleApproveEventsIndexReview = useCallback(async () => {
+    const activeReviewSession = reviewSessionRef.current
+
+    if (!activeReviewSession?.currentProposal) {
+      return
+    }
+
+    setReviewSession((current) => {
+      if (!current) {
+        return current
+      }
+
+      return {
+        ...current,
+        error: null,
+        isLoading: true,
+        loadingAction: 'approve',
+      }
+    })
+
+    const reviewGeneration = reviewGenerationRef.current
+
+    try {
+      const applyResponse = await applyEventsIndex({
+        events_md: activeReviewSession.eventsMd,
+        proposal: activeReviewSession.currentProposal,
+      })
+
+      const appliedReview = applyEventsIndexReviewResult({
+        currentSyncState: syncStateRef.current,
+        currentWorldModel: worldModelRef.current,
+        eventsApplyResponse: applyResponse,
+        selectedFileIds: activeReviewSession.selectedFileIds,
+        workspace: workspaceRef.current,
+      })
+
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setWorldModel(appliedReview.worldModel)
+      setSyncState(appliedReview.syncState)
+      setProjectStatus({
+        kind: 'success',
+        message: 'World model updated from the events review.',
+      })
+      setReviewSession(null)
+      setViewMode('world')
+    } catch (error) {
+      if (reviewGenerationRef.current !== reviewGeneration) {
+        return
+      }
+
+      setReviewSession((current) => {
+        if (!current) {
+          return current
+        }
+
+        return {
+          ...current,
+          error: getWorldSyncErrorMessage(error),
+          isLoading: false,
+          loadingAction: null,
+        }
+      })
+    }
+  }, [setSyncState, setWorldModel])
 
   const handleDialogSubmit = (event) => {
     event.preventDefault()
@@ -530,11 +812,13 @@ function App() {
         <Box className="sidebar-shell">
           <Sidebar
             createTargetId={sidebarCreateTargetId}
+            onDiscardReview={handleDiscardReview}
             onStartSync={handleStartWorldSync}
             onDownloadProject={handleDownloadProject}
             onOpenDialog={openDialog}
             onUploadProject={handleUploadProject}
             projectAction={projectAction}
+            reviewSession={reviewSession}
             syncButtonDisabled={worldSyncButtonState.disabled}
             syncButtonLabel={worldSyncButtonState.label}
             tree={tree}
@@ -556,8 +840,8 @@ function App() {
             selectionMode={selectionMode}
             selectedNode={selectedNode}
             syncBadgeProps={syncBadgeProps}
-            targetFolder={targetFolder}
             onOpenDialog={openDialog}
+            viewMode={viewMode}
           />
 
           {viewMode === 'write' ? (
@@ -569,13 +853,24 @@ function App() {
               onSave={handleSave}
               onSelectNode={tree.select}
             />
-          ) : (
+          ) : null}
+
+          {viewMode === 'world' ? (
             <WorldPanel
               worldModel={worldModel}
               syncState={syncState}
               worldSelection={worldSelection}
             />
-          )}
+          ) : null}
+
+          {viewMode === 'review' ? (
+            <SyncReviewPanel
+              onApprove={handleApproveEventsIndexReview}
+              onRequestChanges={handleRequestReviewChanges}
+              onRetry={handleRetryEventsIndexProposal}
+              reviewSession={reviewSession}
+            />
+          ) : null}
         </Box>
       </Flex>
 

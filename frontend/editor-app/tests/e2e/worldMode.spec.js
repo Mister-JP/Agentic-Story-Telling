@@ -1,6 +1,7 @@
 // @ts-check
 import { test, expect } from '@playwright/test'
 import { buildWorldModelFixture } from '../fixtures/worldModel.js'
+import { clickModeTab } from './support/modeTabs.js'
 
 const WORLD_MODEL_STORAGE_KEY = 'editor-app-world-model-v1'
 
@@ -19,20 +20,18 @@ async function seedWorldModel(page) {
 }
 
 /**
- * Switch to World mode by clicking the "World" radio in the SegmentedControl.
+ * Switch to World mode by clicking the visible SegmentedControl label.
  */
 async function switchToWorldMode(page) {
-  const worldTab = page.getByTestId('mode-tabs').getByText('World', { exact: true })
-  await worldTab.click()
+  await clickModeTab(page, 'World')
   await expect(page.getByTestId('world-sidebar')).toBeVisible({ timeout: 5_000 })
 }
 
 /**
- * Switch back to Write mode by clicking the "Write" radio.
+ * Switch back to Write mode by clicking the visible SegmentedControl label.
  */
 async function switchToWriteMode(page) {
-  const writeTab = page.getByTestId('mode-tabs').getByText('Write', { exact: true })
-  await writeTab.click()
+  await clickModeTab(page, 'Write')
 }
 
 function getWorldItem(worldSidebar, name) {

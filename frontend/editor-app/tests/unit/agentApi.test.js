@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiClientError, proposeEventsIndex } from '../../src/utils/agentApi.js'
+import {
+  ApiClientError,
+  applyEventsIndex,
+  proposeEventsIndex,
+} from '../../src/utils/agentApi.js'
 
 describe('agentApi', () => {
   beforeEach(() => {
@@ -32,6 +36,37 @@ describe('agentApi', () => {
 
     expect(fetch).toHaveBeenCalledOnce()
     expect(responseBody.proposal.scan_summary).toBe('Stub response')
+  })
+
+  it('posts to the events apply endpoint and returns the apply payload', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        actions: ['Created event evt_stub123.'],
+        detail_files: {
+          evt_stub123: '# Stub event',
+        },
+        events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
+      }),
+    })
+
+    const responseBody = await applyEventsIndex({
+      events_md: '# Events',
+      proposal: {
+        scan_summary: 'Stub response',
+        deltas: [],
+      },
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/events-index/apply'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.detail_files.evt_stub123).toBe('# Stub event')
   })
 
   it('throws a typed ApiClientError for structured error responses', async () => {

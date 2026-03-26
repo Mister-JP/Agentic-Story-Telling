@@ -3,14 +3,12 @@ import {
   createContentSnapshot,
   getChangedFiles,
 } from './diffEngine.js'
+import { DEFAULT_EVENTS_INDEX_PREAMBLE, EVENT_FIELD_NAMES } from './eventsIndexFields.js'
 import { renderIndexMarkdown } from './worldModel.js'
 
 const NEVER_SYNCED_STATUS = 'never_synced'
-// Keep this field order in sync with backend/services/stub_payloads.py.
-const EVENT_FIELD_NAMES = ['uuid', 'when', 'chapters', 'summary']
 const DEFAULT_SYNC_BUTTON_LABEL = 'Sync World Model'
 const LOADING_SYNC_BUTTON_LABEL = 'Starting Sync...'
-
 function getInitialSyncFileChanges(currentSnapshot) {
   return Object.entries(currentSnapshot)
     .filter(([, fileSnapshot]) => fileSnapshot.markdown.trim() !== '')
@@ -22,12 +20,15 @@ function getInitialSyncFileChanges(currentSnapshot) {
     }))
 }
 
-function getChangedFilesForSnapshot(currentSnapshot, syncState) {
+function getChangedFilesForSnapshot(
+  currentSnapshot,
+  syncState,
+  lastSyncedSnapshot = getLastSyncedSnapshot(syncState),
+) {
   if (syncState?.status === NEVER_SYNCED_STATUS) {
     return getInitialSyncFileChanges(currentSnapshot)
   }
 
-  const lastSyncedSnapshot = syncState?.lastSyncedSnapshot ?? {}
   return getChangedFiles(currentSnapshot, lastSyncedSnapshot)
 }
 
@@ -35,13 +36,25 @@ function getSelectedFileIdentifiers(changedFiles) {
   return changedFiles.map((changedFile) => changedFile.fileId)
 }
 
+function getLastSyncedSnapshot(syncState) {
+  if (syncState?.status === NEVER_SYNCED_STATUS) {
+    return {}
+  }
+
+  return syncState?.lastSyncedSnapshot ?? {}
+}
+
 export function getEventsIndexMarkdown(worldModel) {
   if (!worldModel?.events) {
     return ''
   }
 
+  const indexPreamble = worldModel.events.indexPreamble?.trim()
+    ? worldModel.events.indexPreamble
+    : DEFAULT_EVENTS_INDEX_PREAMBLE
+
   return renderIndexMarkdown(
-    worldModel.events.indexPreamble,
+    indexPreamble,
     worldModel.events.entries,
     EVENT_FIELD_NAMES,
   )
@@ -52,13 +65,11 @@ export function canStartWorldSync(workspace, syncState) {
   return getChangedFilesForSnapshot(currentSnapshot, syncState).length > 0
 }
 
-export function buildEventsIndexProposePayload(workspace, syncState, worldModel) {
+export function buildWorldSyncDraft(workspace, syncState, worldModel) {
   const currentSnapshot = createContentSnapshot(workspace)
-  const changedFiles = getChangedFilesForSnapshot(currentSnapshot, syncState)
+  const lastSyncedSnapshot = getLastSyncedSnapshot(syncState)
+  const changedFiles = getChangedFilesForSnapshot(currentSnapshot, syncState, lastSyncedSnapshot)
   const selectedFileIds = getSelectedFileIdentifiers(changedFiles)
-  const lastSyncedSnapshot = syncState?.status === NEVER_SYNCED_STATUS
-    ? {}
-    : (syncState?.lastSyncedSnapshot ?? {})
   const diffText = assembleCombinedDiff(
     changedFiles,
     selectedFileIds,
@@ -67,8 +78,10 @@ export function buildEventsIndexProposePayload(workspace, syncState, worldModel)
   )
 
   return {
+    changedFiles,
     diffText,
     eventsMd: getEventsIndexMarkdown(worldModel),
+    selectedFileIds,
   }
 }
 

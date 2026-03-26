@@ -17,6 +17,7 @@ import fileAltIcon from '../assets/icons/file-alt-svgrepo-com.svg'
 import folderAddIcon from '../assets/icons/folder-add-svgrepo-com.svg'
 import folderIcon from '../assets/icons/folder-svgrepo-com.svg'
 import { toMantineTreeData } from '../utils/tree.js'
+import SyncReviewSidebar from './SyncReviewSidebar.jsx'
 import WorldSidebar from './WorldSidebar.jsx'
 
 function getFolderMeta(count) {
@@ -195,11 +196,13 @@ WriteSidebarContent.propTypes = {
 
 function Sidebar({
   createTargetId,
+  onDiscardReview,
   onStartSync,
   onDownloadProject,
   onOpenDialog,
   onUploadProject,
   projectAction,
+  reviewSession,
   syncButtonDisabled,
   syncButtonLabel,
   tree,
@@ -214,19 +217,20 @@ function Sidebar({
   return (
     <Paper className="sidebar-panel" radius="xl" shadow="sm">
       <Stack h="100%" gap="lg">
-        {/* Mode tabs — always visible */}
-        <SegmentedControl
-          className="mode-tabs"
-          data={[
-            { label: 'Write', value: 'write' },
-            { label: 'World', value: 'world' },
-          ]}
-          value={viewMode}
-          onChange={onViewModeChange}
-          fullWidth
-          size="sm"
-          data-testid="mode-tabs"
-        />
+        {viewMode !== 'review' ? (
+          <SegmentedControl
+            className="mode-tabs"
+            data={[
+              { label: 'Write', value: 'write' },
+              { label: 'World', value: 'world' },
+            ]}
+            value={viewMode}
+            onChange={onViewModeChange}
+            fullWidth
+            size="sm"
+            data-testid="mode-tabs"
+          />
+        ) : null}
 
         {viewMode === 'write' ? (
           <WriteSidebarContent
@@ -238,7 +242,9 @@ function Sidebar({
             tree={tree}
             workspace={workspace}
           />
-        ) : (
+        ) : null}
+
+        {viewMode === 'world' ? (
           <WorldSidebar
             onStartSync={onStartSync}
             syncButtonDisabled={syncButtonDisabled}
@@ -248,7 +254,14 @@ function Sidebar({
             worldSelection={worldSelection}
             onWorldSelect={onWorldSelect}
           />
-        )}
+        ) : null}
+
+        {viewMode === 'review' && reviewSession ? (
+          <SyncReviewSidebar
+            onDiscard={onDiscardReview}
+            reviewSession={reviewSession}
+          />
+        ) : null}
       </Stack>
     </Paper>
   )
@@ -256,15 +269,17 @@ function Sidebar({
 
 Sidebar.propTypes = {
   createTargetId: PropTypes.string.isRequired,
+  onDiscardReview: PropTypes.func.isRequired,
   onStartSync: PropTypes.func.isRequired,
   onDownloadProject: PropTypes.func.isRequired,
   onOpenDialog: PropTypes.func.isRequired,
   onUploadProject: PropTypes.func.isRequired,
   projectAction: PropTypes.string,
+  reviewSession: PropTypes.object,
   syncButtonDisabled: PropTypes.bool.isRequired,
   syncButtonLabel: PropTypes.string.isRequired,
   tree: PropTypes.object.isRequired,
-  viewMode: PropTypes.oneOf(['write', 'world']).isRequired,
+  viewMode: PropTypes.oneOf(['write', 'world', 'review']).isRequired,
   onViewModeChange: PropTypes.func.isRequired,
   worldModel: PropTypes.object,
   syncState: PropTypes.object,

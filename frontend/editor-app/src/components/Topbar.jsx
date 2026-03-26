@@ -39,6 +39,15 @@ function getHeaderCopy(selectionMode, selectedNode, selectedPathNames) {
   }
 }
 
+function getReviewHeaderCopy() {
+  return {
+    eyebrow: 'Review',
+    breadcrumb: 'World sync',
+    title: 'Events Index Review',
+    meta: 'Approve or request changes before the proposal is applied to the world model.',
+  }
+}
+
 function getStatusLabel(projectAction, selectionMode, selectedNode) {
   if (projectAction === 'download') {
     return 'Preparing download'
@@ -68,10 +77,16 @@ function Topbar({
   selectionMode,
   selectedNode,
   syncBadgeProps,
+  viewMode,
 }) {
-  const headerCopy = getHeaderCopy(selectionMode, selectedNode, selectedPathNames)
-  const statusLabel = getStatusLabel(projectAction, selectionMode, selectedNode)
-  const showInlineActions = selectionMode === 'file' || selectionMode === 'folder'
+  const isReviewMode = viewMode === 'review'
+  const headerCopy = isReviewMode
+    ? getReviewHeaderCopy()
+    : getHeaderCopy(selectionMode, selectedNode, selectedPathNames)
+  const statusLabel = isReviewMode
+    ? 'Review mode'
+    : getStatusLabel(projectAction, selectionMode, selectedNode)
+  const showInlineActions = !isReviewMode && (selectionMode === 'file' || selectionMode === 'folder')
   const selectionLabel = selectionMode === 'file' ? 'file' : 'folder'
 
   return (
@@ -117,7 +132,7 @@ function Topbar({
             {statusLabel}
           </Badge>
 
-          {syncBadgeProps ? (
+          {!isReviewMode && syncBadgeProps ? (
             <Badge
               className="topbar-sync-pill"
               color={syncBadgeProps.color}
@@ -156,6 +171,7 @@ Topbar.propTypes = {
     label: PropTypes.string.isRequired,
     color: PropTypes.string.isRequired,
   }),
+  viewMode: PropTypes.oneOf(['write', 'world', 'review']).isRequired,
 }
 
 export default Topbar

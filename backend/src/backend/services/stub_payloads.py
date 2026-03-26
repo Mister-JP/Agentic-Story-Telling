@@ -39,6 +39,8 @@ Format:
 - kind | display_name | uuid | aliases | identification_keys
 """
 
+STUB_METADATA_UNAVAILABLE = "Not provided in stub input"
+
 
 @dataclass(frozen=True, slots=True)
 class LayerApplyResult:
@@ -122,6 +124,7 @@ def build_elements_apply_result(existing_markdown: str, proposal: ElementsPropos
 def build_element_detail_result(
     target: DetailTarget,
     current_detail_markdown: str,
+    elements_markdown: str,
 ) -> tuple[ElementFileUpdateProposal, DetailProposalResult]:
     proposal = ElementFileUpdateProposal(
         changed=True,
@@ -139,7 +142,11 @@ def build_element_detail_result(
         open_threads_to_add=["Replace stub detail generation with the real detail harness."],
         approval_message="Stub mode prepared an element detail update.",
     )
-    updated_detail_markdown = render_element_detail_markdown(target, proposal)
+    updated_detail_markdown = render_element_detail_markdown(
+        target,
+        proposal,
+        resolve_element_aliases(target, current_detail_markdown, elements_markdown),
+    )
     preview_diff = build_preview_diff(target.file, current_detail_markdown, updated_detail_markdown)
     return proposal, DetailProposalResult(updated_detail_markdown, preview_diff)
 
@@ -147,6 +154,7 @@ def build_element_detail_result(
 def build_event_detail_result(
     target: DetailTarget,
     current_detail_markdown: str,
+    events_markdown: str,
 ) -> tuple[EventFileUpdateProposal, DetailProposalResult]:
     proposal = EventFileUpdateProposal(
         changed=True,
@@ -159,7 +167,8 @@ def build_event_detail_result(
         open_threads_to_add=["Replace stub event detail generation with the real detail harness."],
         approval_message="Stub mode prepared an event detail update.",
     )
-    updated_detail_markdown = render_event_detail_markdown(target, proposal)
+    when_value, chapters_value = resolve_event_metadata(target, current_detail_markdown, events_markdown)
+    updated_detail_markdown = render_event_detail_markdown(target, proposal, when_value, chapters_value)
     preview_diff = build_preview_diff(target.file, current_detail_markdown, updated_detail_markdown)
     return proposal, DetailProposalResult(updated_detail_markdown, preview_diff)
 
@@ -172,6 +181,9 @@ def extract_evidence_lines(diff_text: str) -> list[str]:
         evidence_lines.append(line[1:].strip())
         if len(evidence_lines) == 2:
             return evidence_lines
+
+    if evidence_lines:
+        return evidence_lines
 
     return ["Deterministic stub evidence generated from the request diff."]
 
@@ -335,6 +347,7 @@ def build_element_detail_file(element_uuid: str, decision: ElementDecision) -> s
 def render_element_detail_markdown(
     target: DetailTarget,
     proposal: ElementFileUpdateProposal,
+    aliases: str,
 ) -> str:
     chronology_lines = build_chronology_lines(proposal.chronology_blocks_to_add)
     stable_profile_lines = build_markdown_list(proposal.stable_profile_to_add)
@@ -348,7 +361,7 @@ def render_element_detail_markdown(
 - UUID: {target.uuid}
 - Type: {target_kind}
 - Canonical name: {target.summary}
-- Aliases: {target.summary}
+- Aliases: {aliases}
 - Identification keys: stub mode
 
 ## Core Understanding
@@ -374,6 +387,8 @@ def render_element_detail_markdown(
 def render_event_detail_markdown(
     target: DetailTarget,
     proposal: EventFileUpdateProposal,
+    when_value: str,
+    chapters_value: str,
 ) -> str:
     causal_context_lines = build_markdown_list(proposal.causal_context_to_add)
     consequence_lines = build_markdown_list(proposal.consequences_to_add)
@@ -384,8 +399,8 @@ def render_event_detail_markdown(
 
 ## Identification
 - UUID: {target.uuid}
-- When: Stub mode
-- Chapters: Stub mode
+- When: {when_value}
+- Chapters: {chapters_value}
 - Summary: {target.summary}
 
 ## Core Understanding
@@ -412,6 +427,58 @@ def build_markdown_list(values: list[str]) -> str:
     if not values:
         return "- TBD"
     return "\n".join(f"- {value}" for value in values)
+
+
+def resolve_element_aliases(target: DetailTarget, current_detail_markdown: str, elements_markdown: str) -> str:
+    index_entry = find_index_entry_by_uuid(elements_markdown, ELEMENT_FIELD_NAMES, target.uuid)
+    if index_entry and index_entry.get("aliases"):
+        return index_entry["aliases"]
+
+    existing_aliases = extract_detail_metadata_value(current_detail_markdown, "Aliases")
+    if existing_aliases:
+        return existing_aliases
+
+    return STUB_METADATA_UNAVAILABLE
+
+
+def resolve_event_metadata(
+    target: DetailTarget,
+    current_detail_markdown: str,
+    events_markdown: str,
+) -> tuple[str, str]:
+    index_entry = find_index_entry_by_uuid(events_markdown, EVENT_FIELD_NAMES, target.uuid)
+    when_value = index_entry.get("when") if index_entry else ""
+    chapters_value = index_entry.get("chapters") if index_entry else ""
+
+    when_value = when_value or extract_detail_metadata_value(current_detail_markdown, "When") or STUB_METADATA_UNAVAILABLE
+    chapters_value = (
+        chapters_value
+        or extract_detail_metadata_value(current_detail_markdown, "Chapters")
+        or STUB_METADATA_UNAVAILABLE
+    )
+
+    return when_value, chapters_value
+
+
+def find_index_entry_by_uuid(markdown: str, field_names: list[str], target_uuid: str) -> dict[str, str] | None:
+    parsed_markdown = parse_index_markdown(markdown, field_names)
+    for entry in parsed_markdown.entries:
+        if entry.get("uuid") == target_uuid:
+            return entry
+
+    return None
+
+
+def extract_detail_metadata_value(detail_markdown: str, field_name: str) -> str:
+    if not detail_markdown:
+        return ""
+
+    field_prefix = f"- {field_name}:"
+    for line in detail_markdown.splitlines():
+        if line.startswith(field_prefix):
+            return line[len(field_prefix) :].strip()
+
+    return ""
 
 
 def build_chronology_lines(blocks: list[ChronologyBlockUpdate]) -> str:

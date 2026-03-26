@@ -94,23 +94,29 @@ export function getChangedFiles(currentSnapshot, lastSyncedSnapshot) {
 
   // Detect added and modified files
   for (const fileId of Object.keys(current)) {
+    const currentMarkdown = current[fileId].markdown.trim()
+
     if (!(fileId in previous)) {
+      if (currentMarkdown === '') {
+        continue
+      }
+
       changedFiles.push({
         fileId,
         fileName: current[fileId].name,
         filePath: current[fileId].path,
         status: 'added',
-      });
-      continue;
+      })
+      continue
     }
 
-    if (current[fileId].markdown !== previous[fileId].markdown) {
+    if (current[fileId].markdown !== previous[fileId].markdown && currentMarkdown !== '') {
       changedFiles.push({
         fileId,
         fileName: current[fileId].name,
         filePath: current[fileId].path,
         status: 'modified',
-      });
+      })
     }
   }
 

@@ -71,7 +71,11 @@ class StubHarnessService:
         )
 
     def propose_element_detail(self, request: ElementDetailProposeRequest) -> ElementDetailProposeResponse:
-        proposal, detail_result = build_element_detail_result(request.target, request.current_detail_md)
+        proposal, detail_result = build_element_detail_result(
+            request.target,
+            request.current_detail_md,
+            request.elements_md,
+        )
         normalized_detail_markdown = normalize_detail_markdown("elements", request.target.uuid, detail_result.updated_detail_markdown)
         return ElementDetailProposeResponse(
             proposal=proposal,
@@ -80,7 +84,11 @@ class StubHarnessService:
         )
 
     def propose_event_detail(self, request: EventDetailProposeRequest) -> EventDetailProposeResponse:
-        proposal, detail_result = build_event_detail_result(request.target, request.current_detail_md)
+        proposal, detail_result = build_event_detail_result(
+            request.target,
+            request.current_detail_md,
+            request.events_md,
+        )
         normalized_detail_markdown = normalize_detail_markdown("events", request.target.uuid, detail_result.updated_detail_markdown)
         return EventDetailProposeResponse(
             proposal=proposal,
