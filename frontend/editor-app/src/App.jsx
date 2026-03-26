@@ -411,6 +411,8 @@ function App() {
       await exportProjectZip({
         workspace,
         selectedNodeId,
+        worldModel,
+        syncState,
       })
 
       setProjectStatus({
@@ -441,6 +443,8 @@ function App() {
       const nextProject = await importProjectZip()
 
       setWorkspace(nextProject.workspace)
+      setWorldModel(nextProject.worldModel)
+      setSyncState(nextProject.syncState)
       syncTreeToWorkspace(nextProject.workspace, nextProject.selectedNodeId)
       setProjectStatus({
         kind: 'success',
