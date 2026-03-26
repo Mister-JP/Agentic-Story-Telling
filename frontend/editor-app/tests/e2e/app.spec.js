@@ -13,6 +13,22 @@ async function clearAppStorage(page) {
   await page.reload()
 }
 
+function getWorkspaceItem(page, name) {
+  return page.getByRole('treeitem', { name: new RegExp(`^${name}\\b`) })
+}
+
+async function createFile(page, name) {
+  await page.getByRole('button', { name: 'Create file' }).click()
+
+  const dialog = page.getByRole('dialog', { name: 'Create file' })
+  await expect(dialog).toBeVisible()
+
+  const nameInput = dialog.getByLabel('Name')
+  await nameInput.clear()
+  await nameInput.fill(name)
+  await dialog.getByRole('button', { name: 'Create file' }).click()
+}
+
 // ── Test 1: App loads ─────────────────────────────────────────────────────
 test('app loads and shows sidebar + editor', async ({ page }) => {
   await clearAppStorage(page)
@@ -23,7 +39,7 @@ test('app loads and shows sidebar + editor', async ({ page }) => {
   ).toBeVisible({ timeout: 10_000 })
 
   // The starter tree's "story-structure" folder should be visible
-  await expect(page.getByText('story-structure')).toBeVisible()
+  await expect(getWorkspaceItem(page, 'story-structure')).toBeVisible()
 
   // The editor pane should be present
   await expect(page.locator('.main-shell').first()).toBeVisible()
@@ -32,30 +48,14 @@ test('app loads and shows sidebar + editor', async ({ page }) => {
 // ── Test 2: Create + edit a file ──────────────────────────────────────────
 test('can create a new file and type content into it', async ({ page }) => {
   await clearAppStorage(page)
-
-  // Open the "New File" dialog.
-  // The "New" button/menu is in the sidebar — find it by its accessible text.
-  const newButton = page.getByRole('button', { name: /new/i }).first()
-  await newButton.click()
-
-  // The menu shows a "New file" item
-  const newFileItem = page.getByRole('menuitem', { name: /new file/i })
-    .or(page.getByText(/new file/i).first())
-  await newFileItem.click()
-
-  // A dialog appears with an input pre-filled with 'untitled.story'
-  const nameInput = page.getByRole('textbox').first()
-  await nameInput.clear()
-  await nameInput.fill('chapter-01.story')
-
-  // Confirm
-  await page.keyboard.press('Enter')
+  await createFile(page, 'chapter-01.story')
 
   // The new file should appear in the sidebar tree
-  await expect(page.getByText('chapter-01.story')).toBeVisible({ timeout: 5_000 })
+  const newFile = getWorkspaceItem(page, 'chapter-01.story')
+  await expect(newFile).toBeVisible({ timeout: 5_000 })
 
   // Click the file to select it and focus the editor
-  await page.getByText('chapter-01.story').click()
+  await newFile.click()
 
   // Type in the Tiptap editor (it's a contenteditable div)
   const editor = page.locator('.ProseMirror').first()
@@ -71,19 +71,11 @@ test('content persists after page reload (localStorage autosave)', async ({ page
   await clearAppStorage(page)
 
   // Create file
-  const newButton = page.getByRole('button', { name: /new/i }).first()
-  await newButton.click()
-  const newFileItem = page.getByRole('menuitem', { name: /new file/i })
-    .or(page.getByText(/new file/i).first())
-  await newFileItem.click()
-
-  const nameInput = page.getByRole('textbox').first()
-  await nameInput.clear()
-  await nameInput.fill('persist-test.story')
-  await page.keyboard.press('Enter')
+  await createFile(page, 'persist-test.story')
 
   // Select and edit the file
-  await page.getByText('persist-test.story').click()
+  const persistedFile = getWorkspaceItem(page, 'persist-test.story')
+  await persistedFile.click()
   const editor = page.locator('.ProseMirror').first()
   await editor.click()
   await editor.fill('This content must survive a reload.')
@@ -95,10 +87,10 @@ test('content persists after page reload (localStorage autosave)', async ({ page
   await page.reload()
 
   // The file must still be present in the tree
-  await expect(page.getByText('persist-test.story')).toBeVisible({ timeout: 5_000 })
+  await expect(persistedFile).toBeVisible({ timeout: 5_000 })
 
   // Select it and confirm content
-  await page.getByText('persist-test.story').click()
+  await persistedFile.click()
   const reloadedEditor = page.locator('.ProseMirror').first()
   await expect(reloadedEditor).toContainText('This content must survive a reload.')
 })

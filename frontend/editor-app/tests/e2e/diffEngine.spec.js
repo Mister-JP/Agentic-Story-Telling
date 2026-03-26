@@ -87,17 +87,23 @@ async function seedWorkspaceWithSyncState(page) {
   await page.reload();
 }
 
+function getWorkspaceItem(page, name) {
+  return page.getByRole('treeitem', { name: new RegExp(`^${name}\\b`) });
+}
+
 // ── Test: Edit two files and verify changed count ────────────────────────
 
 test('editing two files produces a changed count of 2', async ({ page }) => {
   await seedWorkspaceWithSyncState(page);
 
   // Verify the app loaded with our test workspace
-  await expect(page.getByText('chapter-07.story')).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText('chapter-08.story')).toBeVisible();
+  const chapter07 = getWorkspaceItem(page, 'chapter-07.story');
+  const chapter08 = getWorkspaceItem(page, 'chapter-08.story');
+  await expect(chapter07).toBeVisible({ timeout: 10_000 });
+  await expect(chapter08).toBeVisible();
 
   // Edit chapter-07: select it, click editor, type new content
-  await page.getByText('chapter-07.story').click();
+  await chapter07.click();
   const editor = page.locator('.ProseMirror').first();
   await editor.click();
   await page.keyboard.press('End');
@@ -105,7 +111,7 @@ test('editing two files produces a changed count of 2', async ({ page }) => {
   await page.waitForTimeout(500);
 
   // Edit chapter-08: select it, click editor, type new content
-  await page.getByText('chapter-08.story').click();
+  await chapter08.click();
   const editor2 = page.locator('.ProseMirror').first();
   await editor2.click();
   await page.keyboard.press('End');

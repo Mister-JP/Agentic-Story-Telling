@@ -4,6 +4,8 @@ export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
   retries: 1,
+  // Vite cold-starts reliably here with three workers; five caused intermittent first-test timeouts.
+  workers: 3,
   reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {

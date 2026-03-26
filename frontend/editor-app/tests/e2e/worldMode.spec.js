@@ -22,7 +22,7 @@ async function seedWorldModel(page) {
  * Switch to World mode by clicking the "World" radio in the SegmentedControl.
  */
 async function switchToWorldMode(page) {
-  const worldTab = page.getByRole('radio', { name: 'World' })
+  const worldTab = page.getByTestId('mode-tabs').getByText('World', { exact: true })
   await worldTab.click()
   await expect(page.getByTestId('world-sidebar')).toBeVisible({ timeout: 5_000 })
 }
@@ -31,8 +31,12 @@ async function switchToWorldMode(page) {
  * Switch back to Write mode by clicking the "Write" radio.
  */
 async function switchToWriteMode(page) {
-  const writeTab = page.getByRole('radio', { name: 'Write' })
+  const writeTab = page.getByTestId('mode-tabs').getByText('Write', { exact: true })
   await writeTab.click()
+}
+
+function getWorldItem(worldSidebar, name) {
+  return worldSidebar.getByRole('button', { name, exact: true })
 }
 
 // ── Test 1: Switch between Write and World tabs ──────────────────────────
@@ -41,20 +45,24 @@ test('can switch between Write and World mode tabs', async ({ page }) => {
   await seedWorldModel(page)
 
   // App starts in Write mode — sidebar shows workspace tree
-  await expect(page.getByText('story-structure')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByRole('treeitem', { name: /^story-structure\b/ })).toBeVisible({
+    timeout: 10_000,
+  })
 
   // Switch to World mode
   await switchToWorldMode(page)
 
   // World sidebar should show element names from the fixture
   const worldSidebar = page.getByTestId('world-sidebar')
-  await expect(worldSidebar.getByText('Mira')).toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Mira')).toBeVisible()
 
   // Switch back to Write mode
   await switchToWriteMode(page)
 
   // Workspace tree should reappear
-  await expect(page.getByText('story-structure')).toBeVisible({ timeout: 5_000 })
+  await expect(page.getByRole('treeitem', { name: /^story-structure\b/ })).toBeVisible({
+    timeout: 5_000,
+  })
 })
 
 // ── Test 2: Open an element detail view ──────────────────────────────────
@@ -64,12 +72,13 @@ test('opening an element shows its detail view', async ({ page }) => {
   await switchToWorldMode(page)
 
   // Click on Mira in the world sidebar
-  await page.getByTestId('world-sidebar').getByText('Mira').click()
+  await getWorldItem(page.getByTestId('world-sidebar'), 'Mira').click()
 
   // Element detail view should render with section headings
-  await expect(page.getByTestId('element-detail-view')).toBeVisible({ timeout: 5_000 })
-  await expect(page.getByText('Core Understanding')).toBeVisible()
-  await expect(page.getByText('PERSON')).toBeVisible()
+  const detailView = page.getByTestId('element-detail-view')
+  await expect(detailView).toBeVisible({ timeout: 5_000 })
+  await expect(detailView.getByText('Core Understanding')).toBeVisible()
+  await expect(detailView.getByText('PERSON')).toBeVisible()
 })
 
 // ── Test 3: Open an event detail view ────────────────────────────────────
@@ -80,7 +89,7 @@ test('opening an event shows its detail view', async ({ page }) => {
 
   // Click on the first event with "letter" in summary
   const worldSidebar = page.getByTestId('world-sidebar')
-  await worldSidebar.getByText('Mira receives a letter', { exact: false }).first().click()
+  await worldSidebar.getByRole('button', { name: /Mira receives a letter/i }).click()
 
   // Event detail view should render
   await expect(page.getByTestId('event-detail-view')).toBeVisible({ timeout: 5_000 })
@@ -97,18 +106,18 @@ test('search input filters the world sidebar list', async ({ page }) => {
   const worldSidebar = page.getByTestId('world-sidebar')
 
   // Verify Mira and Silver Key are both visible before searching
-  await expect(worldSidebar.getByText('Mira')).toBeVisible()
-  await expect(worldSidebar.getByText('Silver Key')).toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Mira')).toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Silver Key')).toBeVisible()
 
   // Type into the search input
-  const searchInput = page.getByTestId('world-search-input').locator('input')
+  const searchInput = page.getByTestId('world-search-input')
   await searchInput.fill('Silver')
 
   // Silver Key should remain, Mira should be hidden
-  await expect(worldSidebar.getByText('Silver Key')).toBeVisible()
-  await expect(worldSidebar.getByText('Mira')).not.toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Silver Key')).toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Mira')).not.toBeVisible()
 
   // Clear search — all should reappear
   await searchInput.clear()
-  await expect(worldSidebar.getByText('Mira')).toBeVisible()
+  await expect(getWorldItem(worldSidebar, 'Mira')).toBeVisible()
 })
