@@ -1,9 +1,10 @@
 import { Box, Flex, useTree } from '@mantine/core'
 import { useLocalStorage } from '@mantine/hooks'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import EditorPane from './components/EditorPane.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import Topbar from './components/Topbar.jsx'
+import WorldPanel from './components/WorldPanel.jsx'
 import { getSyncBadgeProps } from './utils/syncSelectors.js'
 import WorkspaceDialog from './components/WorkspaceDialog.jsx'
 import {
@@ -97,6 +98,20 @@ function App() {
     () => getSyncBadgeProps(syncState, workspace),
     [syncState, workspace],
   )
+  const [viewMode, setViewMode] = useState('write')
+  const [worldSelection, setWorldSelection] = useState(null)
+
+  const handleViewModeChange = useCallback((nextMode) => {
+    setViewMode(nextMode)
+    if (nextMode === 'write') {
+      setWorldSelection(null)
+    }
+  }, [])
+
+  const handleWorldSelect = useCallback((uuid) => {
+    setWorldSelection(uuid)
+  }, [])
+
   const [dialogAction, setDialogAction] = useState(null)
   const [dialogTargetId, setDialogTargetId] = useState(null)
   const [dialogDraftName, setDialogDraftName] = useState('')
@@ -455,6 +470,12 @@ function App() {
             onUploadProject={handleUploadProject}
             projectAction={projectAction}
             tree={tree}
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            worldModel={worldModel}
+            syncState={syncState}
+            worldSelection={worldSelection}
+            onWorldSelect={handleWorldSelect}
             workspace={workspace}
           />
         </Box>
@@ -471,14 +492,22 @@ function App() {
             onOpenDialog={openDialog}
           />
 
-          <EditorPane
-            selectionMode={selectionMode}
-            selectedNode={selectedNode}
-            selectedFile={selectedFile}
-            onOpenDialog={openDialog}
-            onSave={handleSave}
-            onSelectNode={tree.select}
-          />
+          {viewMode === 'write' ? (
+            <EditorPane
+              selectionMode={selectionMode}
+              selectedNode={selectedNode}
+              selectedFile={selectedFile}
+              onOpenDialog={openDialog}
+              onSave={handleSave}
+              onSelectNode={tree.select}
+            />
+          ) : (
+            <WorldPanel
+              worldModel={worldModel}
+              syncState={syncState}
+              worldSelection={worldSelection}
+            />
+          )}
         </Box>
       </Flex>
 

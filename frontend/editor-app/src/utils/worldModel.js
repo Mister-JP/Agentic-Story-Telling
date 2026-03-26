@@ -232,7 +232,7 @@ export function isDetailPopulated(detailMarkdown) {
  * Split markdown into sections by `## ` headings.
  * Returns an array of { heading, body } objects.
  */
-function splitIntoSections(markdown) {
+export function splitIntoSections(markdown) {
   const lines = markdown.split('\n');
   const sections = [];
   let currentHeading = null;

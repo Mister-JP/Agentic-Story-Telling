@@ -1,6 +1,10 @@
 # Playwright / automation output
 output/
 .playwright-cli/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Jupyter
 **/.ipynb_checkpoints/

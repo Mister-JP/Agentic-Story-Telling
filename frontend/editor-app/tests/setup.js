@@ -23,3 +23,15 @@ Object.defineProperty(window, 'scrollTo', {
   writable: true,
   value: vi.fn(),
 })
+
+// Mantine ScrollArea uses ResizeObserver for measuring content.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    constructor(callback) {
+      this._callback = callback
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
