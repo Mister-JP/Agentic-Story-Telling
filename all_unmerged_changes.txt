@@ -1,0 +1,2646 @@
+diff --git a/.gitignore b/.gitignore
+index 5ef34c5..29f5adc 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,7 +9,7 @@ playwright/.cache/
+ # Jupyter
+ **/.ipynb_checkpoints/
+ 
+-# Secrets and local env (use env vars or a secrets manager)
++*/.venv
+ .env
+ .env.*
+ !.env.example
+diff --git a/pyproject.toml b/backend/pyproject.toml
+similarity index 56%
+rename from pyproject.toml
+rename to backend/pyproject.toml
+index 934095f..94fad1d 100644
+--- a/pyproject.toml
++++ b/backend/pyproject.toml
+@@ -1,20 +1,32 @@
+ [build-system]
+ requires = ["setuptools>=68"]
+-build-backend = "setuptools.backends.legacy:build"
++build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "agentic-story-telling"
+ version = "0.1.0"
+ description = "Agentic world-model harness for fiction writing"
+ requires-python = ">=3.10"
+-dependencies = []
++dependencies = [
++    "fastapi>=0.111,<1.0",
++    "pydantic>=2.0,<3.0",
++    "uvicorn>=0.30,<1.0",
++]
+ 
+ [project.optional-dependencies]
+ test = [
++    "httpx>=0.28",
+     "pytest>=8.0",
+     "pytest-cov>=5.0",
+ ]
+ 
++[tool.setuptools.package-dir]
++"" = "src"
++
++[tool.setuptools.packages.find]
++where = ["src"]
++include = ["backend*"]
++
+ [tool.pytest.ini_options]
+ testpaths = ["tests"]
+ addopts = "-v --tb=short"
+diff --git a/backend/src/backend/__init__.py b/backend/src/backend/__init__.py
+new file mode 100644
+index 0000000..e50472e
+--- /dev/null
++++ b/backend/src/backend/__init__.py
+@@ -0,0 +1 @@
++"""Backend package for the world-model contract service."""
+diff --git a/backend/src/backend/dependencies.py b/backend/src/backend/dependencies.py
+new file mode 100644
+index 0000000..0965ff2
+--- /dev/null
++++ b/backend/src/backend/dependencies.py
+@@ -0,0 +1,16 @@
++from __future__ import annotations
++
++from functools import lru_cache
++import os
++
++from backend.services.harness_service import HarnessService, StubHarnessService
++
++
++@lru_cache(maxsize=1)
++def get_harness_service() -> HarnessService:
++    backend_mode = os.getenv("WORLD_MODEL_BACKEND_MODE", "stub").strip().lower()
++    if backend_mode == "stub":
++        return StubHarnessService()
++    raise NotImplementedError(
++        f"WORLD_MODEL_BACKEND_MODE={backend_mode!r} is not implemented. Only 'stub' is currently supported."
++    )
+diff --git a/backend/src/backend/errors.py b/backend/src/backend/errors.py
+new file mode 100644
+index 0000000..fad06f2
+--- /dev/null
++++ b/backend/src/backend/errors.py
+@@ -0,0 +1,22 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any
++
++
++@dataclass(slots=True)
++class ApiError(Exception):
++    error: str
++    message: str
++    status_code: int
++    retryable: bool
++    details: Any | None = None
++
++
++def build_internal_error() -> ApiError:
++    return ApiError(
++        error="internal_error",
++        message="The backend encountered an unexpected error.",
++        status_code=500,
++        retryable=False,
++    )
+diff --git a/backend/src/backend/index_markdown.py b/backend/src/backend/index_markdown.py
+new file mode 100644
+index 0000000..afa21b0
+--- /dev/null
++++ b/backend/src/backend/index_markdown.py
+@@ -0,0 +1,66 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++ENTRIES_HEADING = "## Entries"
++ENTRY_PREFIX = "- "
++FIELD_SEPARATOR = " | "
++
++
++@dataclass(frozen=True, slots=True)
++class ParsedIndexMarkdown:
++    index_preamble: str
++    entries: list[dict[str, str]]
++
++
++def parse_index_markdown(markdown: str, field_names: list[str]) -> ParsedIndexMarkdown:
++    if not markdown.strip():
++        return ParsedIndexMarkdown(index_preamble="", entries=[])
++
++    heading_index = markdown.find(ENTRIES_HEADING)
++    if heading_index == -1:
++        return ParsedIndexMarkdown(index_preamble=markdown.strip(), entries=[])
++
++    index_preamble = markdown[:heading_index].rstrip()
++    entries_block = markdown[heading_index + len(ENTRIES_HEADING) :]
++    entries = parse_entry_lines(entries_block, field_names)
++    return ParsedIndexMarkdown(index_preamble=index_preamble, entries=entries)
++
++
++def parse_entry_lines(entries_block: str, field_names: list[str]) -> list[dict[str, str]]:
++    entries: list[dict[str, str]] = []
++    for raw_line in entries_block.splitlines():
++        stripped_line = raw_line.strip()
++        if not stripped_line.startswith(ENTRY_PREFIX):
++            continue
++        entry = parse_entry_line(stripped_line[len(ENTRY_PREFIX) :], field_names)
++        if entry:
++            entries.append(entry)
++    return entries
++
++
++def parse_entry_line(raw_line: str, field_names: list[str]) -> dict[str, str] | None:
++    parts = [part.strip() for part in raw_line.split("|")]
++    if len(parts) < len(field_names):
++        return None
++
++    entry: dict[str, str] = {}
++    for index, field_name in enumerate(field_names):
++        entry[field_name] = parts[index]
++    return entry
++
++
++def render_index_markdown(
++    index_preamble: str,
++    entries: list[dict[str, str]],
++    field_names: list[str],
++) -> str:
++    safe_preamble = index_preamble.rstrip()
++    entry_lines = [render_entry_line(entry, field_names) for entry in entries]
++    joined_entry_lines = "\n".join(line for line in entry_lines if line)
++    return f"{safe_preamble}\n\n{ENTRIES_HEADING}\n{joined_entry_lines}\n"
++
++
++def render_entry_line(entry: dict[str, str], field_names: list[str]) -> str:
++    values = [entry.get(field_name, "").strip() for field_name in field_names]
++    return f"{ENTRY_PREFIX}{FIELD_SEPARATOR.join(values)}"
+diff --git a/backend/src/backend/main.py b/backend/src/backend/main.py
+new file mode 100644
+index 0000000..becb744
+--- /dev/null
++++ b/backend/src/backend/main.py
+@@ -0,0 +1,82 @@
++from __future__ import annotations
++
++from fastapi import FastAPI
++from fastapi.exceptions import RequestValidationError
++from fastapi.middleware.cors import CORSMiddleware
++from fastapi.responses import JSONResponse
++
++from backend.errors import ApiError, build_internal_error
++from backend.routes.element_detail import router as element_detail_router
++from backend.routes.elements_index import router as elements_index_router
++from backend.routes.event_detail import router as event_detail_router
++from backend.routes.events_index import router as events_index_router
++from backend.schemas import ErrorResponse
++
++ALLOWED_ORIGINS = [
++    "http://localhost:5173",
++    "http://127.0.0.1:5173",
++]
++
++
++def create_app() -> FastAPI:
++    app = FastAPI(title="Agentic Story Telling Backend", version="0.1.0")
++    configure_cors(app)
++    configure_exception_handlers(app)
++    register_routes(app)
++    return app
++
++
++def configure_cors(app: FastAPI) -> None:
++    app.add_middleware(
++        CORSMiddleware,
++        allow_origins=ALLOWED_ORIGINS,
++        allow_methods=["POST"],
++        allow_headers=["*"],
++    )
++
++
++def configure_exception_handlers(app: FastAPI) -> None:
++    app.add_exception_handler(ApiError, handle_api_error)
++    app.add_exception_handler(RequestValidationError, handle_request_validation_error)
++    app.add_exception_handler(Exception, handle_unexpected_error)
++
++
++def register_routes(app: FastAPI) -> None:
++    app.include_router(events_index_router)
++    app.include_router(elements_index_router)
++    app.include_router(element_detail_router)
++    app.include_router(event_detail_router)
++
++
++def handle_api_error(_, error: ApiError) -> JSONResponse:
++    error_response = ErrorResponse(
++        error=error.error,
++        message=error.message,
++        retryable=error.retryable,
++        details=error.details,
++    )
++    return JSONResponse(status_code=error.status_code, content=error_response.model_dump())
++
++
++def handle_request_validation_error(_, error: RequestValidationError) -> JSONResponse:
++    error_response = ErrorResponse(
++        error="validation_error",
++        message="Request payload validation failed.",
++        retryable=False,
++        details=error.errors(),
++    )
++    return JSONResponse(status_code=422, content=error_response.model_dump())
++
++
++def handle_unexpected_error(_, __: Exception) -> JSONResponse:
++    internal_error = build_internal_error()
++    error_response = ErrorResponse(
++        error=internal_error.error,
++        message=internal_error.message,
++        retryable=internal_error.retryable,
++        details=None,
++    )
++    return JSONResponse(status_code=internal_error.status_code, content=error_response.model_dump())
++
++
++app = create_app()
+diff --git a/backend/src/backend/routes/__init__.py b/backend/src/backend/routes/__init__.py
+new file mode 100644
+index 0000000..dfc08e7
+--- /dev/null
++++ b/backend/src/backend/routes/__init__.py
+@@ -0,0 +1 @@
++"""Route modules for the backend API."""
+diff --git a/backend/src/backend/routes/element_detail.py b/backend/src/backend/routes/element_detail.py
+new file mode 100644
+index 0000000..0d4575e
+--- /dev/null
++++ b/backend/src/backend/routes/element_detail.py
+@@ -0,0 +1,19 @@
++from __future__ import annotations
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends
++
++from backend.dependencies import get_harness_service
++from backend.schemas import ElementDetailProposeRequest, ElementDetailProposeResponse
++from backend.services.harness_service import HarnessService
++
++router = APIRouter(prefix="/harness/element-detail", tags=["element-detail"])
++
++
++@router.post("/propose", response_model=ElementDetailProposeResponse)
++def propose_element_detail(
++    request: ElementDetailProposeRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> ElementDetailProposeResponse:
++    return harness_service.propose_element_detail(request)
+diff --git a/backend/src/backend/routes/elements_index.py b/backend/src/backend/routes/elements_index.py
+new file mode 100644
+index 0000000..1d80e35
+--- /dev/null
++++ b/backend/src/backend/routes/elements_index.py
+@@ -0,0 +1,32 @@
++from __future__ import annotations
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends
++
++from backend.dependencies import get_harness_service
++from backend.schemas import (
++    ElementsIndexApplyRequest,
++    ElementsIndexApplyResponse,
++    ElementsIndexProposeRequest,
++    ElementsIndexProposeResponse,
++)
++from backend.services.harness_service import HarnessService
++
++router = APIRouter(prefix="/harness/elements-index", tags=["elements-index"])
++
++
++@router.post("/propose", response_model=ElementsIndexProposeResponse)
++def propose_elements_index(
++    request: ElementsIndexProposeRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> ElementsIndexProposeResponse:
++    return harness_service.propose_elements_index(request)
++
++
++@router.post("/apply", response_model=ElementsIndexApplyResponse)
++def apply_elements_index(
++    request: ElementsIndexApplyRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> ElementsIndexApplyResponse:
++    return harness_service.apply_elements_index(request)
+diff --git a/backend/src/backend/routes/event_detail.py b/backend/src/backend/routes/event_detail.py
+new file mode 100644
+index 0000000..5f50648
+--- /dev/null
++++ b/backend/src/backend/routes/event_detail.py
+@@ -0,0 +1,19 @@
++from __future__ import annotations
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends
++
++from backend.dependencies import get_harness_service
++from backend.schemas import EventDetailProposeRequest, EventDetailProposeResponse
++from backend.services.harness_service import HarnessService
++
++router = APIRouter(prefix="/harness/event-detail", tags=["event-detail"])
++
++
++@router.post("/propose", response_model=EventDetailProposeResponse)
++def propose_event_detail(
++    request: EventDetailProposeRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> EventDetailProposeResponse:
++    return harness_service.propose_event_detail(request)
+diff --git a/backend/src/backend/routes/events_index.py b/backend/src/backend/routes/events_index.py
+new file mode 100644
+index 0000000..7ccd7b4
+--- /dev/null
++++ b/backend/src/backend/routes/events_index.py
+@@ -0,0 +1,32 @@
++from __future__ import annotations
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends
++
++from backend.dependencies import get_harness_service
++from backend.schemas import (
++    EventsIndexApplyRequest,
++    EventsIndexApplyResponse,
++    EventsIndexProposeRequest,
++    EventsIndexProposeResponse,
++)
++from backend.services.harness_service import HarnessService
++
++router = APIRouter(prefix="/harness/events-index", tags=["events-index"])
++
++
++@router.post("/propose", response_model=EventsIndexProposeResponse)
++def propose_events_index(
++    request: EventsIndexProposeRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> EventsIndexProposeResponse:
++    return harness_service.propose_events_index(request)
++
++
++@router.post("/apply", response_model=EventsIndexApplyResponse)
++def apply_events_index(
++    request: EventsIndexApplyRequest,
++    harness_service: Annotated[HarnessService, Depends(get_harness_service)],
++) -> EventsIndexApplyResponse:
++    return harness_service.apply_events_index(request)
+diff --git a/backend/src/backend/schemas.py b/backend/src/backend/schemas.py
+new file mode 100644
+index 0000000..cdd86b1
+--- /dev/null
++++ b/backend/src/backend/schemas.py
+@@ -0,0 +1,262 @@
++from __future__ import annotations
++
++from enum import Enum
++from typing import Annotated, Any
++
++from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, model_validator
++
++
++def sanitize_required_text(value: Any) -> str:
++    if not isinstance(value, str):
++        raise TypeError("Value must be a string.")
++
++    sanitized_value = value.strip()
++    if sanitized_value == "":
++        raise ValueError("Value must not be empty.")
++    return sanitized_value
++
++
++def sanitize_text(value: Any) -> str:
++    if value is None:
++        return ""
++
++    if not isinstance(value, str):
++        raise TypeError("Value must be a string.")
++    return value.strip()
++
++
++def sanitize_optional_text(value: Any) -> str | None:
++    if value is None:
++        return None
++
++    sanitized_value = sanitize_text(value)
++    if sanitized_value == "":
++        return None
++    return sanitized_value
++
++
++def sanitize_text_list(value: Any) -> list[str]:
++    if value is None:
++        return []
++
++    if not isinstance(value, list):
++        raise TypeError("Value must be a list.")
++
++    sanitized_items: list[str] = []
++    for item in value:
++        sanitized_item = sanitize_text(item)
++        if sanitized_item != "":
++            sanitized_items.append(sanitized_item)
++    return sanitized_items
++
++
++RequiredText = Annotated[str, BeforeValidator(sanitize_required_text)]
++Text = Annotated[str, BeforeValidator(sanitize_text)]
++OptionalText = Annotated[str | None, BeforeValidator(sanitize_optional_text)]
++TextList = Annotated[list[str], BeforeValidator(sanitize_text_list)]
++
++
++class ContractModel(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++
++class HistoryEntry(ContractModel):
++    attempt_number: int = Field(ge=1)
++    previous_output: RequiredText
++    reviewer_feedback: RequiredText
++
++
++class EventDeltaAction(str, Enum):
++    CREATE = "create"
++    UPDATE = "update"
++    DELETE = "delete"
++
++
++class EventDelta(ContractModel):
++    action: EventDeltaAction
++    existing_event_uuid: OptionalText = None
++    when: Text = ""
++    chapters: Text = ""
++    summary: Text = ""
++    reason: RequiredText
++    evidence_from_diff: TextList = Field(default_factory=list)
++
++    @model_validator(mode="after")
++    def validate_shape(self) -> "EventDelta":
++        if self.action == EventDeltaAction.CREATE and self.existing_event_uuid is not None:
++            raise ValueError("existing_event_uuid must be null for create.")
++
++        if self.action == EventDeltaAction.CREATE and self.summary == "":
++            raise ValueError("summary is required for create.")
++
++        if self.action in {EventDeltaAction.UPDATE, EventDeltaAction.DELETE} and self.existing_event_uuid is None:
++            raise ValueError(f"existing_event_uuid is required for {self.action.value}.")
++
++        if self.action == EventDeltaAction.UPDATE and self.summary == "":
++            raise ValueError("summary is required for update.")
++
++        return self
++
++
++class EventAgentOutput(ContractModel):
++    scan_summary: RequiredText
++    deltas: list[EventDelta] = Field(default_factory=list)
++
++
++class ElementKind(str, Enum):
++    PERSON = "person"
++    PLACE = "place"
++    ITEM = "item"
++    ANIMAL = "animal"
++    RELATIONSHIP = "relationship"
++    CONCEPT = "concept"
++    GROUP = "group"
++    OTHER = "other"
++
++    def __str__(self) -> str:
++        return self.value
++
++
++class ElementDecision(ContractModel):
++    display_name: RequiredText
++    kind: ElementKind
++    aliases: TextList = Field(default_factory=list)
++    identification_keys: TextList = Field(default_factory=list)
++    snapshot: RequiredText
++    update_instruction: RequiredText
++    evidence_from_diff: TextList = Field(default_factory=list)
++    matched_existing_display_name: OptionalText = None
++    matched_existing_uuid: OptionalText = None
++    is_new: bool
++
++
++class ElementsProposal(ContractModel):
++    diff_summary: RequiredText
++    rationale: RequiredText
++    identified_elements: list[ElementDecision] = Field(default_factory=list)
++    approval_message: RequiredText
++
++
++class DetailTarget(ContractModel):
++    uuid: RequiredText
++    summary: RequiredText
++    file: RequiredText
++    delta_action: RequiredText
++    update_context: RequiredText
++    kind: ElementKind | None = None
++
++
++class ChronologyBlockUpdate(ContractModel):
++    heading: RequiredText
++    entries: TextList = Field(default_factory=list)
++
++
++class ElementFileUpdateProposal(ContractModel):
++    changed: bool
++    rationale: RequiredText
++    core_understanding_replacement: OptionalText = None
++    stable_profile_to_add: TextList = Field(default_factory=list)
++    stable_profile_to_remove: TextList = Field(default_factory=list)
++    interpretation_to_add: TextList = Field(default_factory=list)
++    interpretation_to_remove: TextList = Field(default_factory=list)
++    knowledge_to_add: TextList = Field(default_factory=list)
++    knowledge_to_remove: TextList = Field(default_factory=list)
++    chronology_blocks_to_add: list[ChronologyBlockUpdate] = Field(default_factory=list)
++    open_threads_to_add: TextList = Field(default_factory=list)
++    open_threads_to_remove: TextList = Field(default_factory=list)
++    approval_message: RequiredText
++
++
++class EventFileUpdateProposal(ContractModel):
++    changed: bool
++    rationale: RequiredText
++    core_understanding_replacement: OptionalText = None
++    causal_context_to_add: TextList = Field(default_factory=list)
++    causal_context_to_remove: TextList = Field(default_factory=list)
++    consequences_to_add: TextList = Field(default_factory=list)
++    consequences_to_remove: TextList = Field(default_factory=list)
++    participants_to_add: TextList = Field(default_factory=list)
++    participants_to_remove: TextList = Field(default_factory=list)
++    evidence_to_add: TextList = Field(default_factory=list)
++    evidence_to_remove: TextList = Field(default_factory=list)
++    open_threads_to_add: TextList = Field(default_factory=list)
++    open_threads_to_remove: TextList = Field(default_factory=list)
++    approval_message: RequiredText
++
++
++class EventsIndexProposeRequest(ContractModel):
++    diff_text: RequiredText
++    events_md: Text
++    history: list[HistoryEntry] = Field(default_factory=list)
++
++
++class EventsIndexProposeResponse(ContractModel):
++    proposal: EventAgentOutput
++
++
++class EventsIndexApplyRequest(ContractModel):
++    events_md: Text
++    proposal: EventAgentOutput
++
++
++class EventsIndexApplyResponse(ContractModel):
++    events_md: Text
++    detail_files: dict[str, str] = Field(default_factory=dict)
++    actions: TextList = Field(default_factory=list)
++
++
++class ElementsIndexProposeRequest(ContractModel):
++    diff_text: RequiredText
++    elements_md: Text
++    history: list[HistoryEntry] = Field(default_factory=list)
++
++
++class ElementsIndexProposeResponse(ContractModel):
++    proposal: ElementsProposal
++
++
++class ElementsIndexApplyRequest(ContractModel):
++    elements_md: Text
++    proposal: ElementsProposal
++
++
++class ElementsIndexApplyResponse(ContractModel):
++    elements_md: Text
++    detail_files: dict[str, str] = Field(default_factory=dict)
++    actions: TextList = Field(default_factory=list)
++
++
++class ElementDetailProposeRequest(ContractModel):
++    diff_text: RequiredText
++    elements_md: Text
++    events_md: Text
++    target: DetailTarget
++    current_detail_md: Text
++    history: list[HistoryEntry] = Field(default_factory=list)
++
++
++class ElementDetailProposeResponse(ContractModel):
++    proposal: ElementFileUpdateProposal
++    preview_diff: Text
++    updated_detail_md: Text
++
++
++class EventDetailProposeRequest(ContractModel):
++    diff_text: RequiredText
++    events_md: Text
++    target: DetailTarget
++    current_detail_md: Text
++    history: list[HistoryEntry] = Field(default_factory=list)
++
++
++class EventDetailProposeResponse(ContractModel):
++    proposal: EventFileUpdateProposal
++    preview_diff: Text
++    updated_detail_md: Text
++
++
++class ErrorResponse(ContractModel):
++    error: RequiredText
++    message: RequiredText
++    retryable: bool
++    details: Any | None = None
+diff --git a/backend/src/backend/services/__init__.py b/backend/src/backend/services/__init__.py
+new file mode 100644
+index 0000000..cb5ac62
+--- /dev/null
++++ b/backend/src/backend/services/__init__.py
+@@ -0,0 +1 @@
++"""Service layer for backend harness integrations."""
+diff --git a/backend/src/backend/services/harness_service.py b/backend/src/backend/services/harness_service.py
+new file mode 100644
+index 0000000..63791b2
+--- /dev/null
++++ b/backend/src/backend/services/harness_service.py
+@@ -0,0 +1,103 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Protocol
++
++from backend.schemas import (
++    ElementDetailProposeRequest,
++    ElementDetailProposeResponse,
++    ElementsIndexApplyRequest,
++    ElementsIndexApplyResponse,
++    ElementsIndexProposeRequest,
++    ElementsIndexProposeResponse,
++    EventDetailProposeRequest,
++    EventDetailProposeResponse,
++    EventsIndexApplyRequest,
++    EventsIndexApplyResponse,
++    EventsIndexProposeRequest,
++    EventsIndexProposeResponse,
++)
++from backend.services.stub_payloads import (
++    build_element_detail_result,
++    build_elements_apply_result,
++    build_event_detail_result,
++    build_events_apply_result,
++    build_stub_elements_proposal,
++    build_stub_event_agent_output,
++)
++from backend.temp_storage import LayerContent, validate_layer_name
++
++
++class HarnessService(Protocol):
++    def propose_events_index(self, request: EventsIndexProposeRequest) -> EventsIndexProposeResponse: ...
++
++    def apply_events_index(self, request: EventsIndexApplyRequest) -> EventsIndexApplyResponse: ...
++
++    def propose_elements_index(self, request: ElementsIndexProposeRequest) -> ElementsIndexProposeResponse: ...
++
++    def apply_elements_index(self, request: ElementsIndexApplyRequest) -> ElementsIndexApplyResponse: ...
++
++    def propose_element_detail(self, request: ElementDetailProposeRequest) -> ElementDetailProposeResponse: ...
++
++    def propose_event_detail(self, request: EventDetailProposeRequest) -> EventDetailProposeResponse: ...
++
++
++@dataclass(slots=True)
++class StubHarnessService:
++    def propose_events_index(self, request: EventsIndexProposeRequest) -> EventsIndexProposeResponse:
++        proposal = build_stub_event_agent_output(request.diff_text)
++        return EventsIndexProposeResponse(proposal=proposal)
++
++    def apply_events_index(self, request: EventsIndexApplyRequest) -> EventsIndexApplyResponse:
++        apply_result = build_events_apply_result(request.events_md, request.proposal)
++        normalized_content = normalize_layer_content("events", apply_result.index_markdown, apply_result.detail_files)
++        return EventsIndexApplyResponse(
++            events_md=normalized_content.index_markdown,
++            detail_files=normalized_content.detail_files,
++            actions=apply_result.actions,
++        )
++
++    def propose_elements_index(self, request: ElementsIndexProposeRequest) -> ElementsIndexProposeResponse:
++        proposal = build_stub_elements_proposal(request.diff_text)
++        return ElementsIndexProposeResponse(proposal=proposal)
++
++    def apply_elements_index(self, request: ElementsIndexApplyRequest) -> ElementsIndexApplyResponse:
++        apply_result = build_elements_apply_result(request.elements_md, request.proposal)
++        normalized_content = normalize_layer_content("elements", apply_result.index_markdown, apply_result.detail_files)
++        return ElementsIndexApplyResponse(
++            elements_md=normalized_content.index_markdown,
++            detail_files=normalized_content.detail_files,
++            actions=apply_result.actions,
++        )
++
++    def propose_element_detail(self, request: ElementDetailProposeRequest) -> ElementDetailProposeResponse:
++        proposal, detail_result = build_element_detail_result(request.target, request.current_detail_md)
++        normalized_detail_markdown = normalize_detail_markdown("elements", request.target.uuid, detail_result.updated_detail_markdown)
++        return ElementDetailProposeResponse(
++            proposal=proposal,
++            preview_diff=detail_result.preview_diff,
++            updated_detail_md=normalized_detail_markdown,
++        )
++
++    def propose_event_detail(self, request: EventDetailProposeRequest) -> EventDetailProposeResponse:
++        proposal, detail_result = build_event_detail_result(request.target, request.current_detail_md)
++        normalized_detail_markdown = normalize_detail_markdown("events", request.target.uuid, detail_result.updated_detail_markdown)
++        return EventDetailProposeResponse(
++            proposal=proposal,
++            preview_diff=detail_result.preview_diff,
++            updated_detail_md=normalized_detail_markdown,
++        )
++
++
++def normalize_layer_content(layer_name: str, index_markdown: str, detail_files: dict[str, str]) -> LayerContent:
++    validate_layer_name(layer_name)
++    # The storage round-trip only validated the layer name and made detail-file order deterministic.
++    return LayerContent(
++        index_markdown=index_markdown,
++        detail_files={detail_uuid: detail_files[detail_uuid] for detail_uuid in sorted(detail_files)},
++    )
++
++
++def normalize_detail_markdown(layer_name: str, detail_uuid: str, detail_markdown: str) -> str:
++    validate_layer_name(layer_name)
++    return detail_markdown
+diff --git a/backend/src/backend/services/stub_payloads.py b/backend/src/backend/services/stub_payloads.py
+new file mode 100644
+index 0000000..38fadda
+--- /dev/null
++++ b/backend/src/backend/services/stub_payloads.py
+@@ -0,0 +1,436 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from difflib import unified_diff
++from hashlib import sha1
++
++from backend.index_markdown import parse_index_markdown, render_index_markdown
++from backend.schemas import (
++    ChronologyBlockUpdate,
++    DetailTarget,
++    ElementDecision,
++    ElementFileUpdateProposal,
++    ElementsProposal,
++    EventAgentOutput,
++    EventDelta,
++    EventDeltaAction,
++    EventFileUpdateProposal,
++)
++
++# Keep this field order in sync with frontend/editor-app/src/utils/worldSync.js.
++EVENT_FIELD_NAMES = ["uuid", "when", "chapters", "summary"]
++ELEMENT_FIELD_NAMES = ["kind", "display_name", "uuid", "aliases", "identification_keys"]
++
++EVENTS_INDEX_PREAMBLE = """# Events
++
++Purpose:
++This file is the canonical index of meaningful story events.
++
++Format:
++- uuid | when | chapters | summary
++"""
++
++ELEMENTS_INDEX_PREAMBLE = """# Elements
++
++Purpose:
++This file is the canonical index of stable, story-relevant elements in the world model.
++
++Format:
++- kind | display_name | uuid | aliases | identification_keys
++"""
++
++
++@dataclass(frozen=True, slots=True)
++class LayerApplyResult:
++    index_markdown: str
++    detail_files: dict[str, str]
++    actions: list[str]
++
++
++@dataclass(frozen=True, slots=True)
++class DetailProposalResult:
++    updated_detail_markdown: str
++    preview_diff: str
++
++
++def build_stub_event_agent_output(diff_text: str) -> EventAgentOutput:
++    return EventAgentOutput(
++        scan_summary="Stub mode analyzed the diff and returned a deterministic events proposal.",
++        deltas=[
++            EventDelta(
++                action=EventDeltaAction.CREATE,
++                when="June 28, 1998, 7:15 a.m.",
++                chapters="Chapter 8",
++                summary="Stubbed altar discovery event for contract integration",
++                reason="Stub mode creates one deterministic event delta so the frontend can integrate against a stable proposal shape.",
++                evidence_from_diff=extract_evidence_lines(diff_text),
++            ),
++        ],
++    )
++
++
++def build_stub_elements_proposal(diff_text: str) -> ElementsProposal:
++    return ElementsProposal(
++        diff_summary="Stub mode found one deterministic element candidate in the diff.",
++        rationale="Stub mode keeps the payload shape stable while real LLM wiring is deferred.",
++        identified_elements=[
++            ElementDecision(
++                display_name="Stubbed Story Element",
++                kind="concept",
++                aliases=["stubbed element"],
++                identification_keys=["contract integration", "deterministic fixture"],
++                snapshot="A deterministic placeholder element used to validate frontend and backend integration.",
++                update_instruction="Create a new placeholder element for stub-mode review flows.",
++                evidence_from_diff=extract_evidence_lines(diff_text),
++                matched_existing_display_name=None,
++                matched_existing_uuid=None,
++                is_new=True,
++            ),
++        ],
++        approval_message="Stub mode would create one placeholder element.",
++    )
++
++
++def build_events_apply_result(existing_markdown: str, proposal: EventAgentOutput) -> LayerApplyResult:
++    parsed_markdown = parse_index_markdown(existing_markdown, EVENT_FIELD_NAMES)
++    entries = list(parsed_markdown.entries)
++    detail_files: dict[str, str] = {}
++    actions: list[str] = []
++
++    for delta in proposal.deltas:
++        apply_event_delta(entries, detail_files, actions, delta)
++
++    index_preamble = parsed_markdown.index_preamble or EVENTS_INDEX_PREAMBLE
++    index_markdown = render_index_markdown(index_preamble, entries, EVENT_FIELD_NAMES)
++    return LayerApplyResult(index_markdown=index_markdown, detail_files=detail_files, actions=actions)
++
++
++def build_elements_apply_result(existing_markdown: str, proposal: ElementsProposal) -> LayerApplyResult:
++    parsed_markdown = parse_index_markdown(existing_markdown, ELEMENT_FIELD_NAMES)
++    entries = list(parsed_markdown.entries)
++    detail_files: dict[str, str] = {}
++    actions: list[str] = []
++
++    for decision in proposal.identified_elements:
++        apply_element_decision(entries, detail_files, actions, decision)
++
++    index_preamble = parsed_markdown.index_preamble or ELEMENTS_INDEX_PREAMBLE
++    index_markdown = render_index_markdown(index_preamble, entries, ELEMENT_FIELD_NAMES)
++    return LayerApplyResult(index_markdown=index_markdown, detail_files=detail_files, actions=actions)
++
++
++def build_element_detail_result(
++    target: DetailTarget,
++    current_detail_markdown: str,
++) -> tuple[ElementFileUpdateProposal, DetailProposalResult]:
++    proposal = ElementFileUpdateProposal(
++        changed=True,
++        rationale="Stub mode proposes one deterministic element-detail update.",
++        core_understanding_replacement=f"{target.summary} is represented by a deterministic stub detail page until the real harness is connected.",
++        stable_profile_to_add=["Visible in stub mode"],
++        interpretation_to_add=["Demonstrates the contract for detail-page updates."],
++        knowledge_to_add=["Awaiting real LLM-backed enrichment."],
++        chronology_blocks_to_add=[
++            ChronologyBlockUpdate(
++                heading="Stub Mode",
++                entries=["Backend contract handshake completed."],
++            ),
++        ],
++        open_threads_to_add=["Replace stub detail generation with the real detail harness."],
++        approval_message="Stub mode prepared an element detail update.",
++    )
++    updated_detail_markdown = render_element_detail_markdown(target, proposal)
++    preview_diff = build_preview_diff(target.file, current_detail_markdown, updated_detail_markdown)
++    return proposal, DetailProposalResult(updated_detail_markdown, preview_diff)
++
++
++def build_event_detail_result(
++    target: DetailTarget,
++    current_detail_markdown: str,
++) -> tuple[EventFileUpdateProposal, DetailProposalResult]:
++    proposal = EventFileUpdateProposal(
++        changed=True,
++        rationale="Stub mode proposes one deterministic event-detail update.",
++        core_understanding_replacement=f"{target.summary} is represented by a deterministic stub event detail until the real harness is connected.",
++        causal_context_to_add=["Triggered by a backend contract verification request."],
++        consequences_to_add=["Confirms the frontend can consume detail-update responses."],
++        participants_to_add=["Frontend integration layer", "Stub backend service"],
++        evidence_to_add=["Deterministic stub response generated by the backend."],
++        open_threads_to_add=["Replace stub event detail generation with the real detail harness."],
++        approval_message="Stub mode prepared an event detail update.",
++    )
++    updated_detail_markdown = render_event_detail_markdown(target, proposal)
++    preview_diff = build_preview_diff(target.file, current_detail_markdown, updated_detail_markdown)
++    return proposal, DetailProposalResult(updated_detail_markdown, preview_diff)
++
++
++def extract_evidence_lines(diff_text: str) -> list[str]:
++    evidence_lines: list[str] = []
++    for line in diff_text.splitlines():
++        if not line.startswith("+") or line.startswith("+++"):
++            continue
++        evidence_lines.append(line[1:].strip())
++        if len(evidence_lines) == 2:
++            return evidence_lines
++
++    return ["Deterministic stub evidence generated from the request diff."]
++
++
++def apply_event_delta(
++    entries: list[dict[str, str]],
++    detail_files: dict[str, str],
++    actions: list[str],
++    delta: EventDelta,
++) -> None:
++    if delta.action == EventDeltaAction.DELETE:
++        remove_entry(entries, delta.existing_event_uuid or "")
++        actions.append(f"Deleted event {delta.existing_event_uuid}.")
++        return
++
++    event_uuid = resolve_event_uuid(delta)
++    event_entry = build_event_entry(event_uuid, delta)
++    upsert_entry(entries, event_entry, "uuid")
++    actions.append(build_event_action(delta.action, event_uuid, delta.summary))
++
++    if delta.action == EventDeltaAction.CREATE:
++        detail_files[event_uuid] = build_event_detail_file(event_uuid, delta)
++
++
++def apply_element_decision(
++    entries: list[dict[str, str]],
++    detail_files: dict[str, str],
++    actions: list[str],
++    decision: ElementDecision,
++) -> None:
++    element_uuid = resolve_element_uuid(decision)
++    element_entry = build_element_entry(element_uuid, decision)
++    upsert_entry(entries, element_entry, "uuid")
++
++    if decision.is_new:
++        detail_files[element_uuid] = build_element_detail_file(element_uuid, decision)
++        actions.append(f"Created element {element_uuid}: {decision.display_name}.")
++        return
++
++    actions.append(f"Updated element {element_uuid}: {decision.display_name}.")
++
++
++def remove_entry(entries: list[dict[str, str]], entry_uuid: str) -> None:
++    entries[:] = [entry for entry in entries if entry.get("uuid") != entry_uuid]
++
++
++def upsert_entry(entries: list[dict[str, str]], next_entry: dict[str, str], key_name: str) -> None:
++    for index, current_entry in enumerate(entries):
++        if current_entry.get(key_name) != next_entry.get(key_name):
++            continue
++        entries[index] = next_entry
++        return
++
++    entries.append(next_entry)
++
++
++def build_event_action(action: EventDeltaAction, event_uuid: str, summary: str) -> str:
++    action_label = action.value.capitalize()
++    return f"{action_label} event {event_uuid}: {summary}."
++
++
++def resolve_event_uuid(delta: EventDelta) -> str:
++    if delta.action != EventDeltaAction.CREATE and delta.existing_event_uuid:
++        return delta.existing_event_uuid
++    return build_uuid("evt", delta.summary)
++
++
++def resolve_element_uuid(decision: ElementDecision) -> str:
++    if decision.matched_existing_uuid:
++        return decision.matched_existing_uuid
++    return build_uuid("elt", decision.display_name)
++
++
++def build_uuid(prefix: str, value: str) -> str:
++    digest = sha1(value.encode("utf-8")).hexdigest()[:12]
++    return f"{prefix}_{digest}"
++
++
++def build_event_entry(event_uuid: str, delta: EventDelta) -> dict[str, str]:
++    return {
++        "uuid": event_uuid,
++        "when": delta.when,
++        "chapters": delta.chapters,
++        "summary": delta.summary,
++    }
++
++
++def build_element_entry(element_uuid: str, decision: ElementDecision) -> dict[str, str]:
++    return {
++        "kind": decision.kind.value,
++        "display_name": decision.display_name,
++        "uuid": element_uuid,
++        "aliases": ", ".join(decision.aliases),
++        "identification_keys": "; ".join(decision.identification_keys),
++    }
++
++
++def build_event_detail_file(event_uuid: str, delta: EventDelta) -> str:
++    evidence_lines = "\n".join(f"- {line}" for line in delta.evidence_from_diff)
++    return f"""# {delta.summary}
++
++## Identification
++- UUID: {event_uuid}
++- When: {delta.when}
++- Chapters: {delta.chapters}
++- Summary: {delta.summary}
++
++## Core Understanding
++Stub mode created this event detail file to validate apply responses.
++
++## Causal Context
++- Deterministic contract test
++
++## Consequences & Ripple Effects
++- Enables frontend integration before real LLM calls
++
++## Participants & Roles
++- Stub backend service
++
++## Evidence & Grounding
++{evidence_lines}
++
++## Open Threads
++- Replace stub event detail generation with the real harness
++"""
++
++
++def build_element_detail_file(element_uuid: str, decision: ElementDecision) -> str:
++    aliases = ", ".join(decision.aliases) or decision.display_name
++    identification_keys = "; ".join(decision.identification_keys)
++    return f"""# {decision.display_name}
++
++## Identification
++- UUID: {element_uuid}
++- Type: {decision.kind.value}
++- Canonical name: {decision.display_name}
++- Aliases: {aliases}
++- Identification keys: {identification_keys}
++
++## Core Understanding
++{decision.snapshot}
++
++## Stable Profile
++- Deterministic stub detail
++
++## Interpretation
++- Demonstrates the element apply response shape
++
++## Knowledge / Beliefs / Uncertainties
++- Awaiting real LLM-backed enrichment
++
++## Element-Centered Chronology
++### Stub Mode
++- Placeholder detail generated for backend contract testing
++
++## Open Threads
++- Replace stub element detail generation with the real harness
++"""
++
++
++def render_element_detail_markdown(
++    target: DetailTarget,
++    proposal: ElementFileUpdateProposal,
++) -> str:
++    chronology_lines = build_chronology_lines(proposal.chronology_blocks_to_add)
++    stable_profile_lines = build_markdown_list(proposal.stable_profile_to_add)
++    interpretation_lines = build_markdown_list(proposal.interpretation_to_add)
++    knowledge_lines = build_markdown_list(proposal.knowledge_to_add)
++    open_thread_lines = build_markdown_list(proposal.open_threads_to_add)
++    target_kind = target.kind.value if target.kind is not None else "other"
++    return f"""# {target.summary}
++
++## Identification
++- UUID: {target.uuid}
++- Type: {target_kind}
++- Canonical name: {target.summary}
++- Aliases: {target.summary}
++- Identification keys: stub mode
++
++## Core Understanding
++{proposal.core_understanding_replacement or "Stub mode generated a placeholder element detail."}
++
++## Stable Profile
++{stable_profile_lines}
++
++## Interpretation
++{interpretation_lines}
++
++## Knowledge / Beliefs / Uncertainties
++{knowledge_lines}
++
++## Element-Centered Chronology
++{chronology_lines}
++
++## Open Threads
++{open_thread_lines}
++"""
++
++
++def render_event_detail_markdown(
++    target: DetailTarget,
++    proposal: EventFileUpdateProposal,
++) -> str:
++    causal_context_lines = build_markdown_list(proposal.causal_context_to_add)
++    consequence_lines = build_markdown_list(proposal.consequences_to_add)
++    participant_lines = build_markdown_list(proposal.participants_to_add)
++    evidence_lines = build_markdown_list(proposal.evidence_to_add)
++    open_thread_lines = build_markdown_list(proposal.open_threads_to_add)
++    return f"""# {target.summary}
++
++## Identification
++- UUID: {target.uuid}
++- When: Stub mode
++- Chapters: Stub mode
++- Summary: {target.summary}
++
++## Core Understanding
++{proposal.core_understanding_replacement or "Stub mode generated a placeholder event detail."}
++
++## Causal Context
++{causal_context_lines}
++
++## Consequences & Ripple Effects
++{consequence_lines}
++
++## Participants & Roles
++{participant_lines}
++
++## Evidence & Grounding
++{evidence_lines}
++
++## Open Threads
++{open_thread_lines}
++"""
++
++
++def build_markdown_list(values: list[str]) -> str:
++    if not values:
++        return "- TBD"
++    return "\n".join(f"- {value}" for value in values)
++
++
++def build_chronology_lines(blocks: list[ChronologyBlockUpdate]) -> str:
++    if not blocks:
++        return "- TBD"
++
++    chronology_sections: list[str] = []
++    for block in blocks:
++        chronology_sections.append(f"### {block.heading}")
++        chronology_sections.extend(f"- {entry}" for entry in block.entries)
++    return "\n".join(chronology_sections)
++
++
++def build_preview_diff(file_path: str, current_text: str, updated_text: str) -> str:
++    diff_lines = unified_diff(
++        current_text.splitlines(),
++        updated_text.splitlines(),
++        fromfile=f"a/{file_path}",
++        tofile=f"b/{file_path}",
++        lineterm="",
++    )
++    return "\n".join(diff_lines)
+diff --git a/backend/src/backend/temp_storage.py b/backend/src/backend/temp_storage.py
+new file mode 100644
+index 0000000..fe872f9
+--- /dev/null
++++ b/backend/src/backend/temp_storage.py
+@@ -0,0 +1,79 @@
++from __future__ import annotations
++
++from contextlib import contextmanager
++from dataclasses import dataclass
++from pathlib import Path
++from tempfile import TemporaryDirectory
++from typing import Iterator
++
++SUPPORTED_LAYER_NAMES = frozenset({"elements", "events"})
++
++
++@dataclass(frozen=True, slots=True)
++class LayerFilePaths:
++    index_file: Path
++    detail_directory: Path
++
++
++@dataclass(frozen=True, slots=True)
++class LayerContent:
++    index_markdown: str
++    detail_files: dict[str, str]
++
++
++@contextmanager
++def temporary_story_workspace() -> Iterator[Path]:
++    with TemporaryDirectory() as temp_directory:
++        workspace_root = Path(temp_directory)
++        (workspace_root / "story").mkdir(parents=True, exist_ok=True)
++        yield workspace_root
++
++
++def validate_layer_name(layer_name: str) -> None:
++    if layer_name not in SUPPORTED_LAYER_NAMES:
++        raise ValueError(f"Unsupported layer: {layer_name}")
++
++
++def get_layer_file_paths(storage_root: Path, layer_name: str) -> LayerFilePaths:
++    validate_layer_name(layer_name)
++    story_root = storage_root / "story"
++    return LayerFilePaths(
++        index_file=story_root / f"{layer_name}.md",
++        detail_directory=story_root / layer_name,
++    )
++
++
++def write_layer_content(storage_root: Path, layer_name: str, layer_content: LayerContent) -> None:
++    file_paths = get_layer_file_paths(storage_root, layer_name)
++    file_paths.detail_directory.mkdir(parents=True, exist_ok=True)
++    file_paths.index_file.write_text(layer_content.index_markdown, encoding="utf-8")
++    write_detail_files(file_paths.detail_directory, layer_content.detail_files)
++
++
++def write_detail_files(detail_directory: Path, detail_files: dict[str, str]) -> None:
++    for uuid, markdown in detail_files.items():
++        detail_path = detail_directory / f"{uuid}.md"
++        detail_path.write_text(markdown, encoding="utf-8")
++
++
++def read_layer_content(storage_root: Path, layer_name: str) -> LayerContent:
++    file_paths = get_layer_file_paths(storage_root, layer_name)
++    index_markdown = read_text_file(file_paths.index_file)
++    detail_files = read_detail_files(file_paths.detail_directory)
++    return LayerContent(index_markdown=index_markdown, detail_files=detail_files)
++
++
++def read_text_file(file_path: Path) -> str:
++    if not file_path.exists():
++        return ""
++    return file_path.read_text(encoding="utf-8")
++
++
++def read_detail_files(detail_directory: Path) -> dict[str, str]:
++    if not detail_directory.exists():
++        return {}
++
++    detail_files: dict[str, str] = {}
++    for detail_path in sorted(detail_directory.glob("*.md")):
++        detail_files[detail_path.stem] = detail_path.read_text(encoding="utf-8")
++    return detail_files
+diff --git a/tests/conftest.py b/backend/tests/conftest.py
+similarity index 96%
+rename from tests/conftest.py
+rename to backend/tests/conftest.py
+index 825fa30..98e8486 100644
+--- a/tests/conftest.py
++++ b/backend/tests/conftest.py
+@@ -6,8 +6,8 @@ helpers and live regression guards for the world-model markdown files.
+ import pytest
+ from pathlib import Path
+ 
+-# Repo root is two levels up from this file:  tests/ -> repo root
+-REPO_ROOT = Path(__file__).parent.parent
++# Repo root is two levels up from backend/tests/: backend/tests -> backend -> repo root
++REPO_ROOT = Path(__file__).resolve().parents[2]
+ STORY_DIR = REPO_ROOT / "story"
+ 
+ 
+diff --git a/backend/tests/test_backend_api.py b/backend/tests/test_backend_api.py
+new file mode 100644
+index 0000000..52e1e53
+--- /dev/null
++++ b/backend/tests/test_backend_api.py
+@@ -0,0 +1,184 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from fastapi.testclient import TestClient
++
++from backend.dependencies import get_harness_service
++from backend.errors import ApiError
++from backend.main import create_app
++
++
++def build_client(service_override=None, raise_server_exceptions=True) -> TestClient:
++    application = create_app()
++    if service_override is not None:
++        application.dependency_overrides[get_harness_service] = lambda: service_override
++    return TestClient(application, raise_server_exceptions=raise_server_exceptions)
++
++
++def build_events_index_propose_payload() -> dict:
++    return {
++        "diff_text": "--- a/chapter-08.story\n+++ b/chapter-08.story\n+She noticed the altar cloth.",
++        "events_md": "# Events",
++        "history": [],
++    }
++
++
++def build_events_index_apply_payload() -> dict:
++    return {
++        "events_md": "# Events",
++        "proposal": {
++            "scan_summary": "Stub mode summary.",
++            "deltas": [
++                {
++                    "action": "create",
++                    "existing_event_uuid": None,
++                    "when": "June 28, 1998, 7:15 a.m.",
++                    "chapters": "Chapter 8",
++                    "summary": "Stubbed altar discovery event for contract integration",
++                    "reason": "Create a deterministic event in stub mode.",
++                    "evidence_from_diff": ["She noticed the altar cloth."],
++                }
++            ],
++        },
++    }
++
++
++def build_elements_index_propose_payload() -> dict:
++    return {
++        "diff_text": "--- a/chapter-08.story\n+++ b/chapter-08.story\n+The silver key felt colder than before.",
++        "elements_md": "# Elements",
++        "history": [],
++    }
++
++
++def build_elements_index_apply_payload() -> dict:
++    return {
++        "elements_md": "# Elements",
++        "proposal": {
++            "diff_summary": "Stub mode summary.",
++            "rationale": "Stub mode rationale.",
++            "identified_elements": [
++                {
++                    "display_name": "Stubbed Story Element",
++                    "kind": "concept",
++                    "aliases": ["stubbed element"],
++                    "identification_keys": ["contract integration", "deterministic fixture"],
++                    "snapshot": "A deterministic placeholder element.",
++                    "update_instruction": "Create a new placeholder element.",
++                    "evidence_from_diff": ["The silver key felt colder than before."],
++                    "matched_existing_display_name": None,
++                    "matched_existing_uuid": None,
++                    "is_new": True,
++                }
++            ],
++            "approval_message": "Stub mode would create one placeholder element.",
++        },
++    }
++
++
++def build_detail_payload(endpoint_name: str) -> dict:
++    payload = {
++        "diff_text": "--- a/chapter-08.story\n+++ b/chapter-08.story\n+The chapel door was already open.",
++        "target": {
++            "uuid": f"{endpoint_name}_123",
++            "summary": "Stubbed detail target",
++            "file": f"{endpoint_name}/{endpoint_name}_123.md",
++            "delta_action": "update",
++            "update_context": "Update the stub detail target.",
++        },
++        "current_detail_md": "# Stubbed detail target\n\n## Identification\n- UUID: stub\n",
++        "history": [],
++    }
++    if endpoint_name == "event":
++        payload["events_md"] = "# Events"
++        return payload
++
++    payload["elements_md"] = "# Elements"
++    payload["events_md"] = "# Events"
++    return payload
++
++
++def test_all_stub_routes_return_successful_contract_shapes() -> None:
++    test_cases = [
++        ("/harness/events-index/propose", build_events_index_propose_payload(), "proposal"),
++        ("/harness/events-index/apply", build_events_index_apply_payload(), "events_md"),
++        ("/harness/elements-index/propose", build_elements_index_propose_payload(), "proposal"),
++        ("/harness/elements-index/apply", build_elements_index_apply_payload(), "elements_md"),
++        ("/harness/element-detail/propose", build_detail_payload("element"), "updated_detail_md"),
++        ("/harness/event-detail/propose", build_detail_payload("event"), "updated_detail_md"),
++    ]
++    client = build_client()
++
++    for endpoint_path, payload, response_key in test_cases:
++        response = client.post(endpoint_path, json=payload)
++        response_body = response.json()
++
++        assert response.status_code == 200
++        assert response_key in response_body
++
++
++def test_element_detail_uses_target_kind_when_present() -> None:
++    client = build_client()
++    payload = build_detail_payload("element")
++    payload["target"]["kind"] = "person"
++
++    response = client.post("/harness/element-detail/propose", json=payload)
++    response_body = response.json()
++
++    assert response.status_code == 200
++    assert "- Type: person" in response_body["updated_detail_md"]
++
++
++def test_validation_errors_use_the_shared_error_envelope() -> None:
++    client = build_client()
++    response = client.post("/harness/events-index/propose", json={"events_md": "# Events", "history": []})
++    response_body = response.json()
++
++    assert response.status_code == 422
++    assert response_body["error"] == "validation_error"
++    assert response_body["retryable"] is False
++
++
++@dataclass
++class FailingHarnessService:
++    failure: Exception
++
++    def propose_events_index(self, _request):
++        raise self.failure
++
++    def apply_events_index(self, _request):
++        raise AssertionError("Unexpected route call.")
++
++    def propose_elements_index(self, _request):
++        raise AssertionError("Unexpected route call.")
++
++    def apply_elements_index(self, _request):
++        raise AssertionError("Unexpected route call.")
++
++    def propose_element_detail(self, _request):
++        raise AssertionError("Unexpected route call.")
++
++    def propose_event_detail(self, _request):
++        raise AssertionError("Unexpected route call.")
++
++
++def test_shared_error_mapping_covers_retryable_and_non_retryable_failures() -> None:
++    failure_cases = [
++        (ApiError("llm_timeout", "Timed out.", 504, True), 504, "llm_timeout", True),
++        (ApiError("llm_rate_limit", "Rate limited.", 429, True), 429, "llm_rate_limit", True),
++        (ApiError("parse_error", "Failed to parse markdown.", 500, False), 500, "parse_error", False),
++        (RuntimeError("boom"), 500, "internal_error", False),
++    ]
++
++    for failure, expected_status_code, expected_error_code, expected_retryable in failure_cases:
++        client = build_client(
++            service_override=FailingHarnessService(failure=failure),
++            raise_server_exceptions=False,
++        )
++        response = client.post("/harness/events-index/propose", json=build_events_index_propose_payload())
++        response_body = response.json()
++
++        assert response.status_code == expected_status_code
++        assert response_body["error"] == expected_error_code
++        assert response_body["retryable"] is expected_retryable
+diff --git a/backend/tests/test_backend_dependencies.py b/backend/tests/test_backend_dependencies.py
+new file mode 100644
+index 0000000..463709e
+--- /dev/null
++++ b/backend/tests/test_backend_dependencies.py
+@@ -0,0 +1,28 @@
++from __future__ import annotations
++
++import pytest
++
++from backend.dependencies import get_harness_service
++from backend.services.harness_service import StubHarnessService
++
++
++@pytest.fixture(autouse=True)
++def clear_harness_service_cache() -> None:
++    get_harness_service.cache_clear()
++    yield
++    get_harness_service.cache_clear()
++
++
++def test_get_harness_service_defaults_to_stub(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.delenv("WORLD_MODEL_BACKEND_MODE", raising=False)
++
++    service = get_harness_service()
++
++    assert isinstance(service, StubHarnessService)
++
++
++def test_get_harness_service_raises_for_unimplemented_backend(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setenv("WORLD_MODEL_BACKEND_MODE", "real")
++
++    with pytest.raises(NotImplementedError, match="Only 'stub' is currently supported"):
++        get_harness_service()
+diff --git a/backend/tests/test_backend_harness_service.py b/backend/tests/test_backend_harness_service.py
+new file mode 100644
+index 0000000..394ebeb
+--- /dev/null
++++ b/backend/tests/test_backend_harness_service.py
+@@ -0,0 +1,32 @@
++from __future__ import annotations
++
++import pytest
++
++from backend.services.harness_service import normalize_detail_markdown, normalize_layer_content
++
++
++def test_normalize_layer_content_sorts_detail_files_without_disk_round_trip() -> None:
++    normalized_content = normalize_layer_content(
++        "events",
++        "# Events",
++        {
++            "evt_b": "# Event B",
++            "evt_a": "# Event A",
++        },
++    )
++
++    assert normalized_content.index_markdown == "# Events"
++    assert list(normalized_content.detail_files) == ["evt_a", "evt_b"]
++
++
++def test_normalize_layer_content_rejects_unknown_layers() -> None:
++    with pytest.raises(ValueError, match="Unsupported layer"):
++        normalize_layer_content("unknown", "", {})
++
++
++def test_normalize_detail_markdown_validates_layer_and_preserves_content() -> None:
++    detail_markdown = "# Element\n\n## Identification\n- UUID: elt_123\n"
++
++    normalized_markdown = normalize_detail_markdown("elements", "elt_123", detail_markdown)
++
++    assert normalized_markdown == detail_markdown
+diff --git a/backend/tests/test_backend_schemas.py b/backend/tests/test_backend_schemas.py
+new file mode 100644
+index 0000000..3561661
+--- /dev/null
++++ b/backend/tests/test_backend_schemas.py
+@@ -0,0 +1,63 @@
++from __future__ import annotations
++
++import pytest
++from pydantic import ValidationError
++
++from backend.schemas import (
++    ElementDecision,
++    EventDelta,
++    EventDeltaAction,
++    EventsIndexProposeRequest,
++)
++
++
++def test_events_index_request_trims_strings_and_history() -> None:
++    request_model = EventsIndexProposeRequest(
++        diff_text="  + Added line  ",
++        events_md="  # Events  ",
++        history=[
++            {
++                "attempt_number": 1,
++                "previous_output": "  {\"proposal\": 1}  ",
++                "reviewer_feedback": "  tighten the summary  ",
++            }
++        ],
++    )
++
++    assert request_model.diff_text == "+ Added line"
++    assert request_model.events_md == "# Events"
++    assert request_model.history[0].previous_output == "{\"proposal\": 1}"
++    assert request_model.history[0].reviewer_feedback == "tighten the summary"
++
++
++def test_event_delta_requires_existing_uuid_for_update() -> None:
++    with pytest.raises(ValidationError):
++        EventDelta(
++            action=EventDeltaAction.UPDATE,
++            existing_event_uuid=None,
++            when="June 28, 1998",
++            chapters="Chapter 8",
++            summary="Updated summary",
++            reason="The diff clarified the timing.",
++        )
++
++
++def test_element_decision_sanitizes_alias_and_key_lists() -> None:
++    decision = ElementDecision(
++        display_name="  Mira  ",
++        kind="person",
++        aliases=[" Mira ", "", None],
++        identification_keys=[" carries the silver key ", "  ", None],
++        snapshot="  Core story investigator.  ",
++        update_instruction="  Create a new stub record.  ",
++        evidence_from_diff=[" + Mira stepped into the chapel. ", "", None],
++        matched_existing_display_name=None,
++        matched_existing_uuid=None,
++        is_new=True,
++    )
++
++    assert decision.display_name == "Mira"
++    assert decision.aliases == ["Mira"]
++    assert decision.identification_keys == ["carries the silver key"]
++    assert decision.snapshot == "Core story investigator."
++    assert decision.evidence_from_diff == ["+ Mira stepped into the chapel."]
+diff --git a/backend/tests/test_backend_temp_storage.py b/backend/tests/test_backend_temp_storage.py
+new file mode 100644
+index 0000000..32bb0f0
+--- /dev/null
++++ b/backend/tests/test_backend_temp_storage.py
+@@ -0,0 +1,26 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from backend.temp_storage import LayerContent, get_layer_file_paths, read_layer_content, temporary_story_workspace, write_layer_content
++
++
++def test_layer_content_round_trip_preserves_index_and_details() -> None:
++    layer_content = LayerContent(
++        index_markdown="# Events\n\n## Entries\n- evt_123 | June 28, 1998 | Chapter 8 | Chapel door opens\n",
++        detail_files={"evt_123": "# Chapel door opens\n\n## Identification\n- UUID: evt_123\n"},
++    )
++
++    with temporary_story_workspace() as workspace_root:
++        write_layer_content(workspace_root, "events", layer_content)
++        restored_content = read_layer_content(workspace_root, "events")
++
++    assert restored_content.index_markdown == layer_content.index_markdown
++    assert restored_content.detail_files == layer_content.detail_files
++
++
++def test_get_layer_file_paths_raises_for_unknown_layer() -> None:
++    with pytest.raises(ValueError):
++        get_layer_file_paths(Path("."), "unknown")
+diff --git a/tests/test_story_fixtures.py b/backend/tests/test_story_fixtures.py
+similarity index 100%
+rename from tests/test_story_fixtures.py
+rename to backend/tests/test_story_fixtures.py
+diff --git a/docs/HLD-world-model-integration.md b/docs/HLD-world-model-integration.md
+index aa640dc..cda7846 100644
+--- a/docs/HLD-world-model-integration.md
++++ b/docs/HLD-world-model-integration.md
+@@ -1639,7 +1639,7 @@ backend/
+ │   └── prompts.py             # System/user prompt templates (from notebook)
+ ├── services/
+ │   └── sync_service.py        # Orchestration logic: temp dir setup, agent calls, result extraction
+-├── requirements.txt
++├── pyproject.toml
+ └── .env                       # API keys
+ ```
+ 
+@@ -1699,10 +1699,8 @@ async def propose_events_index(request: EventsIndexProposeRequest):
+ cd backend
+ python -m venv .venv
+ source .venv/bin/activate
+-pip install -r requirements.txt
+-# Create .env with API keys
+-echo "GROQ_API_KEY=your_key_here" > .env
+-uvicorn main:app --reload --port 8000
++pip install -e .
++python -m uvicorn backend.main:app --reload --port 8000
+ ```
+ 
+ **Frontend setup:**
+diff --git a/frontend/editor-app/src/App.jsx b/frontend/editor-app/src/App.jsx
+index ebef48e..b433572 100644
+--- a/frontend/editor-app/src/App.jsx
++++ b/frontend/editor-app/src/App.jsx
+@@ -5,7 +5,12 @@ import EditorPane from './components/EditorPane.jsx'
+ import Sidebar from './components/Sidebar.jsx'
+ import Topbar from './components/Topbar.jsx'
+ import WorldPanel from './components/WorldPanel.jsx'
++import { ApiClientError, proposeEventsIndex } from './utils/agentApi.js'
+ import { getSyncBadgeProps } from './utils/syncSelectors.js'
++import {
++  buildEventsIndexProposePayload,
++  getWorldSyncButtonState,
++} from './utils/worldSync.js'
+ import WorkspaceDialog from './components/WorkspaceDialog.jsx'
+ import {
+   DEFAULT_FILE_ID,
+@@ -72,6 +77,20 @@ function getPathNodes(workspace, selectedId) {
+     .filter(Boolean)
+ }
+ 
++function buildWorldSyncSuccessMessage(proposal) {
++  const proposedDeltaCount = proposal?.deltas?.length ?? 0
++  const deltaLabel = proposedDeltaCount === 1 ? 'proposal' : 'proposals'
++  return `Backend contract reachable. Received ${proposedDeltaCount} stub event ${deltaLabel}.`
++}
++
++function getWorldSyncErrorMessage(error) {
++  if (error instanceof ApiClientError) {
++    return error.message
++  }
++
++  return 'Failed to start world sync.'
++}
++
+ const INITIAL_SYNC_STATE = {
+   status: 'never_synced',
+   lastSyncedAt: null,
+@@ -93,11 +112,16 @@ function App() {
+     key: 'editor-app-sync-state-v1',
+     defaultValue: INITIAL_SYNC_STATE,
+   })
++  const [isWorldSyncLoading, setIsWorldSyncLoading] = useState(false)
+ 
+   const syncBadgeProps = useMemo(
+     () => getSyncBadgeProps(syncState, workspace),
+     [syncState, workspace],
+   )
++  const worldSyncButtonState = useMemo(
++    () => getWorldSyncButtonState(workspace, syncState, isWorldSyncLoading),
++    [workspace, syncState, isWorldSyncLoading],
++  )
+   const [viewMode, setViewMode] = useState('write')
+   const [worldSelection, setWorldSelection] = useState(null)
+ 
+@@ -354,6 +378,43 @@ function App() {
+     setWorkspace((current) => updateFileContent(current, fileId, content))
+   }
+ 
++  const handleStartWorldSync = async () => {
++    if (isWorldSyncLoading) {
++      return
++    }
++
++    if (worldSyncButtonState.disabled) {
++      setProjectStatus({
++        kind: 'error',
++        message: 'Write or change some story content before starting a world sync.',
++      })
++      return
++    }
++
++    setProjectStatus(null)
++    setIsWorldSyncLoading(true)
++
++    try {
++      const { diffText, eventsMd } = buildEventsIndexProposePayload(workspace, syncState, worldModel)
++      const response = await proposeEventsIndex({
++        diff_text: diffText,
++        events_md: eventsMd,
++        history: [],
++      })
++      setProjectStatus({
++        kind: 'success',
++        message: buildWorldSyncSuccessMessage(response?.proposal),
++      })
++    } catch (error) {
++      setProjectStatus({
++        kind: 'error',
++        message: getWorldSyncErrorMessage(error),
++      })
++    } finally {
++      setIsWorldSyncLoading(false)
++    }
++  }
++
+   const handleDialogSubmit = (event) => {
+     event.preventDefault()
+ 
+@@ -469,10 +530,13 @@ function App() {
+         <Box className="sidebar-shell">
+           <Sidebar
+             createTargetId={sidebarCreateTargetId}
++            onStartSync={handleStartWorldSync}
+             onDownloadProject={handleDownloadProject}
+             onOpenDialog={openDialog}
+             onUploadProject={handleUploadProject}
+             projectAction={projectAction}
++            syncButtonDisabled={worldSyncButtonState.disabled}
++            syncButtonLabel={worldSyncButtonState.label}
+             tree={tree}
+             viewMode={viewMode}
+             onViewModeChange={handleViewModeChange}
+diff --git a/frontend/editor-app/src/components/Sidebar.jsx b/frontend/editor-app/src/components/Sidebar.jsx
+index 4e14ec6..e019b90 100644
+--- a/frontend/editor-app/src/components/Sidebar.jsx
++++ b/frontend/editor-app/src/components/Sidebar.jsx
+@@ -195,10 +195,13 @@ WriteSidebarContent.propTypes = {
+ 
+ function Sidebar({
+   createTargetId,
++  onStartSync,
+   onDownloadProject,
+   onOpenDialog,
+   onUploadProject,
+   projectAction,
++  syncButtonDisabled,
++  syncButtonLabel,
+   tree,
+   viewMode,
+   onViewModeChange,
+@@ -237,6 +240,9 @@ function Sidebar({
+           />
+         ) : (
+           <WorldSidebar
++            onStartSync={onStartSync}
++            syncButtonDisabled={syncButtonDisabled}
++            syncButtonLabel={syncButtonLabel}
+             worldModel={worldModel}
+             syncState={syncState}
+             worldSelection={worldSelection}
+@@ -250,10 +256,13 @@ function Sidebar({
+ 
+ Sidebar.propTypes = {
+   createTargetId: PropTypes.string.isRequired,
++  onStartSync: PropTypes.func.isRequired,
+   onDownloadProject: PropTypes.func.isRequired,
+   onOpenDialog: PropTypes.func.isRequired,
+   onUploadProject: PropTypes.func.isRequired,
+   projectAction: PropTypes.string,
++  syncButtonDisabled: PropTypes.bool.isRequired,
++  syncButtonLabel: PropTypes.string.isRequired,
+   tree: PropTypes.object.isRequired,
+   viewMode: PropTypes.oneOf(['write', 'world']).isRequired,
+   onViewModeChange: PropTypes.func.isRequired,
+diff --git a/frontend/editor-app/src/components/Topbar.jsx b/frontend/editor-app/src/components/Topbar.jsx
+index 4303f21..feecfb7 100644
+--- a/frontend/editor-app/src/components/Topbar.jsx
++++ b/frontend/editor-app/src/components/Topbar.jsx
+@@ -131,7 +131,10 @@ function Topbar({
+       </div>
+ 
+       {projectStatus ? (
+-        <Text className={`project-status${projectStatus.kind === 'error' ? ' is-error' : ''}`}>
++        <Text
++          className={`project-status${projectStatus.kind === 'error' ? ' is-error' : ''}`}
++          data-testid="project-status-message"
++        >
+           {projectStatus.message}
+         </Text>
+       ) : null}
+diff --git a/frontend/editor-app/src/components/WorldSidebar.jsx b/frontend/editor-app/src/components/WorldSidebar.jsx
+index 1c2fa03..e980b44 100644
+--- a/frontend/editor-app/src/components/WorldSidebar.jsx
++++ b/frontend/editor-app/src/components/WorldSidebar.jsx
+@@ -89,9 +89,58 @@ function filterEntries(entries, query, labelField) {
+   return entries.filter((entry) => matchesQuery(entry[labelField] ?? '', query))
+ }
+ 
++function WorldSyncButton({ disabled, label, onStartSync }) {
++  return (
++    <Button
++      className="world-sidebar-sync-button"
++      data-testid="world-sync-button"
++      disabled={disabled}
++      fullWidth
++      onClick={onStartSync}
++      size="sm"
++    >
++      {label}
++    </Button>
++  )
++}
++
++WorldSyncButton.propTypes = {
++  disabled: PropTypes.bool.isRequired,
++  label: PropTypes.string.isRequired,
++  onStartSync: PropTypes.func.isRequired,
++}
++
++function PopulatedWorldSyncBlock({ disabled, label, lastSyncLabel, onStartSync, syncStatusLabel }) {
++  return (
++    <Box className="world-sidebar-sync-block">
++      <WorldSyncButton disabled={disabled} label={label} onStartSync={onStartSync} />
++      <Text className="world-sidebar-sync-status">{syncStatusLabel}</Text>
++      {lastSyncLabel ? (
++        <Text className="world-sidebar-sync-meta">{lastSyncLabel}</Text>
++      ) : null}
++    </Box>
++  )
++}
++
++PopulatedWorldSyncBlock.propTypes = {
++  disabled: PropTypes.bool.isRequired,
++  label: PropTypes.string.isRequired,
++  lastSyncLabel: PropTypes.string,
++  onStartSync: PropTypes.func.isRequired,
++  syncStatusLabel: PropTypes.string.isRequired,
++}
++
+ // ── Main sidebar ──────────────────────────────────────────────────────────
+ 
+-function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect }) {
++function WorldSidebar({
++  onStartSync,
++  syncButtonDisabled,
++  syncButtonLabel,
++  worldModel,
++  syncState,
++  worldSelection,
++  onWorldSelect,
++}) {
+   const [searchQuery, setSearchQuery] = useState('')
+ 
+   const elementGroups = useMemo(() => {
+@@ -114,6 +163,11 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect })
+   if (!worldModel) {
+     return (
+       <Stack gap="md" className="world-sidebar-content" data-testid="world-sidebar-empty">
++        <WorldSyncButton
++          disabled={syncButtonDisabled}
++          label={syncButtonLabel}
++          onStartSync={onStartSync}
++        />
+         <Text className="topbar-context-meta">
+           No world model yet. Write some story content and sync to build your world.
+         </Text>
+@@ -128,21 +182,13 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect })
+ 
+   return (
+     <Stack h="100%" gap="sm" className="world-sidebar-content" data-testid="world-sidebar">
+-      {/* Sync CTA */}
+-      <Box className="world-sidebar-sync-block">
+-        <Button
+-          className="world-sidebar-sync-button"
+-          fullWidth
+-          disabled
+-          size="sm"
+-        >
+-          Sync World Model
+-        </Button>
+-        <Text className="world-sidebar-sync-status">{syncStatusLabel}</Text>
+-        {lastSyncLabel ? (
+-          <Text className="world-sidebar-sync-meta">{lastSyncLabel}</Text>
+-        ) : null}
+-      </Box>
++      <PopulatedWorldSyncBlock
++        disabled={syncButtonDisabled}
++        label={syncButtonLabel}
++        lastSyncLabel={lastSyncLabel}
++        onStartSync={onStartSync}
++        syncStatusLabel={syncStatusLabel}
++      />
+ 
+       {/* Search */}
+       <TextInput
+@@ -226,6 +272,9 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect })
+ }
+ 
+ WorldSidebar.propTypes = {
++  onStartSync: PropTypes.func.isRequired,
++  syncButtonDisabled: PropTypes.bool.isRequired,
++  syncButtonLabel: PropTypes.string.isRequired,
+   worldModel: PropTypes.object,
+   syncState: PropTypes.object,
+   worldSelection: PropTypes.string,
+diff --git a/frontend/editor-app/src/utils/agentApi.js b/frontend/editor-app/src/utils/agentApi.js
+new file mode 100644
+index 0000000..a51a404
+--- /dev/null
++++ b/frontend/editor-app/src/utils/agentApi.js
+@@ -0,0 +1,113 @@
++const DEFAULT_BACKEND_API_BASE = 'http://localhost:8000'
++const REQUEST_TIMEOUT_MS = 120_000
++
++export class ApiClientError extends Error {
++  constructor({ errorCode, message, retryable, statusCode, details }) {
++    super(message)
++    this.name = 'ApiClientError'
++    this.errorCode = errorCode
++    this.retryable = retryable
++    this.statusCode = statusCode
++    this.details = details
++  }
++}
++
++function getBackendApiBaseUrl() {
++  const configuredBaseUrl = import.meta.env.VITE_BACKEND_API_BASE ?? DEFAULT_BACKEND_API_BASE
++  return configuredBaseUrl.replace(/\/+$/, '')
++}
++
++function isStructuredErrorResponse(responseBody) {
++  if (!responseBody || typeof responseBody !== 'object') {
++    return false
++  }
++
++  return typeof responseBody.error === 'string' && typeof responseBody.message === 'string'
++}
++
++async function parseJsonResponse(response) {
++  try {
++    return await response.json()
++  } catch {
++    return null
++  }
++}
++
++function buildApiClientError(response, responseBody) {
++  if (!isStructuredErrorResponse(responseBody)) {
++    return new ApiClientError({
++      errorCode: 'network_error',
++      message: 'The backend returned an unreadable error response.',
++      retryable: false,
++      statusCode: response.status,
++      details: null,
++    })
++  }
++
++  return new ApiClientError({
++    errorCode: responseBody.error,
++    message: responseBody.message,
++    retryable: Boolean(responseBody.retryable),
++    statusCode: response.status,
++    details: responseBody.details ?? null,
++  })
++}
++
++function buildNetworkClientError({ errorCode, message, retryable = true }) {
++  return new ApiClientError({
++    errorCode,
++    message,
++    retryable,
++    statusCode: null,
++    details: null,
++  })
++}
++
++function isAbortError(error) {
++  return Boolean(error) && typeof error === 'object' && error.name === 'AbortError'
++}
++
++async function postJson(endpointPath, payload) {
++  const controller = new AbortController()
++  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
++
++  try {
++    const response = await fetch(`${getBackendApiBaseUrl()}${endpointPath}`, {
++      method: 'POST',
++      headers: {
++        'Content-Type': 'application/json',
++      },
++      body: JSON.stringify(payload),
++      signal: controller.signal,
++    })
++    const responseBody = await parseJsonResponse(response)
++
++    if (!response.ok) {
++      throw buildApiClientError(response, responseBody)
++    }
++
++    return responseBody
++  } catch (error) {
++    if (error instanceof ApiClientError) {
++      throw error
++    }
++
++    if (isAbortError(error)) {
++      throw buildNetworkClientError({
++        errorCode: 'request_timeout',
++        message: 'The backend request timed out after 120 seconds. Please try again.',
++      })
++    }
++
++    throw buildNetworkClientError({
++      errorCode: 'network_error',
++      message: 'Could not reach the backend. Please try again.',
++    })
++  } finally {
++    globalThis.clearTimeout(timeoutId)
++  }
++}
++
++export async function proposeEventsIndex(payload) {
++  return postJson('/harness/events-index/propose', payload)
++}
+diff --git a/frontend/editor-app/src/utils/worldSync.js b/frontend/editor-app/src/utils/worldSync.js
+new file mode 100644
+index 0000000..e34f600
+--- /dev/null
++++ b/frontend/editor-app/src/utils/worldSync.js
+@@ -0,0 +1,87 @@
++import {
++  assembleCombinedDiff,
++  createContentSnapshot,
++  getChangedFiles,
++} from './diffEngine.js'
++import { renderIndexMarkdown } from './worldModel.js'
++
++const NEVER_SYNCED_STATUS = 'never_synced'
++// Keep this field order in sync with backend/services/stub_payloads.py.
++const EVENT_FIELD_NAMES = ['uuid', 'when', 'chapters', 'summary']
++const DEFAULT_SYNC_BUTTON_LABEL = 'Sync World Model'
++const LOADING_SYNC_BUTTON_LABEL = 'Starting Sync...'
++
++function getInitialSyncFileChanges(currentSnapshot) {
++  return Object.entries(currentSnapshot)
++    .filter(([, fileSnapshot]) => fileSnapshot.markdown.trim() !== '')
++    .map(([fileId, fileSnapshot]) => ({
++      fileId,
++      fileName: fileSnapshot.name,
++      filePath: fileSnapshot.path,
++      status: 'added',
++    }))
++}
++
++function getChangedFilesForSnapshot(currentSnapshot, syncState) {
++  if (syncState?.status === NEVER_SYNCED_STATUS) {
++    return getInitialSyncFileChanges(currentSnapshot)
++  }
++
++  const lastSyncedSnapshot = syncState?.lastSyncedSnapshot ?? {}
++  return getChangedFiles(currentSnapshot, lastSyncedSnapshot)
++}
++
++function getSelectedFileIdentifiers(changedFiles) {
++  return changedFiles.map((changedFile) => changedFile.fileId)
++}
++
++export function getEventsIndexMarkdown(worldModel) {
++  if (!worldModel?.events) {
++    return ''
++  }
++
++  return renderIndexMarkdown(
++    worldModel.events.indexPreamble,
++    worldModel.events.entries,
++    EVENT_FIELD_NAMES,
++  )
++}
++
++export function canStartWorldSync(workspace, syncState) {
++  const currentSnapshot = createContentSnapshot(workspace)
++  return getChangedFilesForSnapshot(currentSnapshot, syncState).length > 0
++}
++
++export function buildEventsIndexProposePayload(workspace, syncState, worldModel) {
++  const currentSnapshot = createContentSnapshot(workspace)
++  const changedFiles = getChangedFilesForSnapshot(currentSnapshot, syncState)
++  const selectedFileIds = getSelectedFileIdentifiers(changedFiles)
++  const lastSyncedSnapshot = syncState?.status === NEVER_SYNCED_STATUS
++    ? {}
++    : (syncState?.lastSyncedSnapshot ?? {})
++  const diffText = assembleCombinedDiff(
++    changedFiles,
++    selectedFileIds,
++    currentSnapshot,
++    lastSyncedSnapshot,
++  )
++
++  return {
++    diffText,
++    eventsMd: getEventsIndexMarkdown(worldModel),
++  }
++}
++
++export function getWorldSyncButtonState(workspace, syncState, isSyncInProgress) {
++  if (isSyncInProgress === true) {
++    return {
++      disabled: true,
++      label: LOADING_SYNC_BUTTON_LABEL,
++    }
++  }
++
++  return {
++    disabled: canStartWorldSync(workspace, syncState) === false,
++    label: DEFAULT_SYNC_BUTTON_LABEL,
++  }
++}
+diff --git a/frontend/editor-app/tests/e2e/worldSync.spec.js b/frontend/editor-app/tests/e2e/worldSync.spec.js
+new file mode 100644
+index 0000000..dea4862
+--- /dev/null
++++ b/frontend/editor-app/tests/e2e/worldSync.spec.js
+@@ -0,0 +1,72 @@
++// @ts-check
++import { expect, test } from '@playwright/test'
++
++function buildSuccessResponseBody() {
++  return {
++    proposal: {
++      scan_summary: 'Stub backend response',
++      deltas: [
++        {
++          action: 'create',
++          existing_event_uuid: null,
++          when: 'June 28, 1998, 7:15 a.m.',
++          chapters: 'Chapter 8',
++          summary: 'Stubbed altar discovery event for contract integration',
++          reason: 'Deterministic stub response.',
++          evidence_from_diff: ['She noticed the altar cloth.'],
++        },
++      ],
++    },
++  }
++}
++
++async function openWorldMode(page) {
++  await page.goto('/')
++  await page.getByTestId('mode-tabs').getByText('World', { exact: true }).click()
++  await expect(page.getByTestId('world-sync-button')).toBeVisible()
++}
++
++test('world sync CTA shows a loading state while the request is in flight', async ({ page }) => {
++  await page.route('**/harness/events-index/propose', async (route) => {
++    await new Promise((resolve) => setTimeout(resolve, 250))
++    await route.fulfill({
++      status: 200,
++      contentType: 'application/json',
++      body: JSON.stringify(buildSuccessResponseBody()),
++    })
++  })
++
++  await openWorldMode(page)
++
++  const syncButton = page.getByTestId('world-sync-button')
++  await syncButton.click()
++
++  await expect(syncButton).toBeDisabled()
++  await expect(syncButton).toHaveText('Starting Sync...')
++  await expect(page.getByTestId('project-status-message')).toContainText('Backend contract reachable')
++  await expect(syncButton).toBeEnabled()
++  await expect(syncButton).toHaveText('Sync World Model')
++})
++
++test('world sync CTA shows the backend error and re-enables the button', async ({ page }) => {
++  await page.route('**/harness/events-index/propose', async (route) => {
++    await route.fulfill({
++      status: 504,
++      contentType: 'application/json',
++      body: JSON.stringify({
++        error: 'llm_timeout',
++        message: 'The LLM call timed out after 120 seconds. Please try again.',
++        retryable: true,
++      }),
++    })
++  })
++
++  await openWorldMode(page)
++
++  const syncButton = page.getByTestId('world-sync-button')
++  await syncButton.click()
++
++  await expect(page.getByTestId('project-status-message')).toContainText('timed out after 120 seconds')
++  await expect(syncButton).toBeEnabled()
++  await expect(syncButton).toHaveText('Sync World Model')
++})
+diff --git a/frontend/editor-app/tests/unit/agentApi.test.js b/frontend/editor-app/tests/unit/agentApi.test.js
+new file mode 100644
+index 0000000..c2a1df1
+--- /dev/null
++++ b/frontend/editor-app/tests/unit/agentApi.test.js
+@@ -0,0 +1,120 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
++
++import { ApiClientError, proposeEventsIndex } from '../../src/utils/agentApi.js'
++
++describe('agentApi', () => {
++  beforeEach(() => {
++    vi.stubGlobal('fetch', vi.fn())
++  })
++
++  afterEach(() => {
++    vi.useRealTimers()
++    vi.unstubAllGlobals()
++  })
++
++  it('returns parsed JSON for successful responses', async () => {
++    fetch.mockResolvedValue({
++      ok: true,
++      status: 200,
++      json: vi.fn().mockResolvedValue({
++        proposal: {
++          scan_summary: 'Stub response',
++          deltas: [],
++        },
++      }),
++    })
++
++    const responseBody = await proposeEventsIndex({
++      diff_text: '+ Added line',
++      events_md: '# Events',
++      history: [],
++    })
++
++    expect(fetch).toHaveBeenCalledOnce()
++    expect(responseBody.proposal.scan_summary).toBe('Stub response')
++  })
++
++  it('throws a typed ApiClientError for structured error responses', async () => {
++    fetch.mockResolvedValue({
++      ok: false,
++      status: 504,
++      json: vi.fn().mockResolvedValue({
++        error: 'llm_timeout',
++        message: 'The LLM call timed out after 120 seconds. Please try again.',
++        retryable: true,
++      }),
++    })
++
++    await expect(
++      proposeEventsIndex({
++        diff_text: '+ Added line',
++        events_md: '# Events',
++        history: [],
++      }),
++    ).rejects.toEqual(
++      expect.objectContaining({
++        name: 'ApiClientError',
++        errorCode: 'llm_timeout',
++        retryable: true,
++        statusCode: 504,
++      }),
++    )
++  })
++
++  it('falls back to a network error when the backend response is unreadable', async () => {
++    fetch.mockResolvedValue({
++      ok: false,
++      status: 500,
++      json: vi.fn().mockRejectedValue(new Error('bad json')),
++    })
++
++    let thrownError = null
++    try {
++      await proposeEventsIndex({
++        diff_text: '+ Added line',
++        events_md: '# Events',
++        history: [],
++      })
++    } catch (error) {
++      thrownError = error
++    }
++
++    expect(thrownError).toBeInstanceOf(ApiClientError)
++    expect(thrownError.errorCode).toBe('network_error')
++  })
++
++  it('times out hung requests and throws a retryable timeout error', async () => {
++    vi.useFakeTimers()
++    fetch.mockImplementation((_url, options) => new Promise((_resolve, reject) => {
++      options.signal.addEventListener('abort', () => {
++        const abortError = new Error('Request aborted')
++        abortError.name = 'AbortError'
++        reject(abortError)
++      })
++    }))
++
++    const responsePromise = proposeEventsIndex({
++      diff_text: '+ Added line',
++      events_md: '# Events',
++      history: [],
++    })
++    const rejectionExpectation = expect(responsePromise).rejects.toEqual(
++      expect.objectContaining({
++        name: 'ApiClientError',
++        errorCode: 'request_timeout',
++        retryable: true,
++        statusCode: null,
++      }),
++    )
++
++    await vi.advanceTimersByTimeAsync(120_000)
++
++    await rejectionExpectation
++    expect(fetch).toHaveBeenCalledWith(
++      expect.any(String),
++      expect.objectContaining({
++        signal: expect.any(Object),
++      }),
++    )
++  })
++})
+diff --git a/frontend/editor-app/tests/unit/worldModeUI.test.jsx b/frontend/editor-app/tests/unit/worldModeUI.test.jsx
+index b860cac..e7bad7f 100644
+--- a/frontend/editor-app/tests/unit/worldModeUI.test.jsx
++++ b/frontend/editor-app/tests/unit/worldModeUI.test.jsx
+@@ -26,16 +26,25 @@ describe('WorldSidebar', () => {
+   const worldModel = buildWorldModelFixture()
+   const defaultSyncState = { status: 'synced', lastSyncedAt: null, lastSyncedSnapshot: {} }
+   const noopSelect = vi.fn()
++  const noopSync = vi.fn()
+ 
+-  it('renders element kind groups with correct labels', () => {
+-    renderWithMantine(
++  function renderWorldSidebar(overrideProps = {}) {
++    return renderWithMantine(
+       <WorldSidebar
++        onStartSync={noopSync}
++        syncButtonDisabled={false}
++        syncButtonLabel="Sync World Model"
+         worldModel={worldModel}
+         syncState={defaultSyncState}
+         worldSelection={null}
+         onWorldSelect={noopSelect}
++        {...overrideProps}
+       />,
+     )
++  }
++
++  it('renders element kind groups with correct labels', () => {
++    renderWorldSidebar()
+ 
+     // The fixture has persons, places, and items
+     expect(screen.getByText(/PERSON/i)).toBeInTheDocument()
+@@ -44,14 +53,7 @@ describe('WorldSidebar', () => {
+   })
+ 
+   it('renders element names within groups', () => {
+-    renderWithMantine(
+-      <WorldSidebar
+-        worldModel={worldModel}
+-        syncState={defaultSyncState}
+-        worldSelection={null}
+-        onWorldSelect={noopSelect}
+-      />,
+-    )
++    renderWorldSidebar()
+ 
+     expect(screen.getByText('Mira')).toBeInTheDocument()
+     expect(screen.getByText('Arun')).toBeInTheDocument()
+@@ -60,14 +62,7 @@ describe('WorldSidebar', () => {
+   })
+ 
+   it('renders event chapter groups and summaries', () => {
+-    renderWithMantine(
+-      <WorldSidebar
+-        worldModel={worldModel}
+-        syncState={defaultSyncState}
+-        worldSelection={null}
+-        onWorldSelect={noopSelect}
+-      />,
+-    )
++    renderWorldSidebar()
+ 
+     // Events are grouped by chapter
+     expect(screen.getByText(/Chapter 7/)).toBeInTheDocument()
+@@ -75,14 +70,7 @@ describe('WorldSidebar', () => {
+   })
+ 
+   it('shows populated dot for elements with detail content and TBD dot for empty ones', () => {
+-    renderWithMantine(
+-      <WorldSidebar
+-        worldModel={worldModel}
+-        syncState={defaultSyncState}
+-        worldSelection={null}
+-        onWorldSelect={noopSelect}
+-      />,
+-    )
++    renderWorldSidebar()
+ 
+     const allItems = screen.getAllByTestId('world-item')
+ 
+@@ -100,14 +88,7 @@ describe('WorldSidebar', () => {
+   it('filters elements and events by search query', async () => {
+     const user = userEvent.setup()
+ 
+-    renderWithMantine(
+-      <WorldSidebar
+-        worldModel={worldModel}
+-        syncState={defaultSyncState}
+-        worldSelection={null}
+-        onWorldSelect={noopSelect}
+-      />,
+-    )
++    renderWorldSidebar()
+ 
+     const searchInput = screen.getByTestId('world-search-input')
+     await user.type(searchInput, 'Mira')
+@@ -121,18 +102,24 @@ describe('WorldSidebar', () => {
+   })
+ 
+   it('shows empty state when worldModel is null', () => {
+-    renderWithMantine(
+-      <WorldSidebar
+-        worldModel={null}
+-        syncState={null}
+-        worldSelection={null}
+-        onWorldSelect={noopSelect}
+-      />,
+-    )
++    renderWorldSidebar({
++      worldModel: null,
++      syncState: null,
++    })
+ 
+     expect(screen.getByTestId('world-sidebar-empty')).toBeInTheDocument()
+     expect(screen.getByText(/no world model yet/i)).toBeInTheDocument()
+   })
++
++  it('renders the sync button with the provided CTA state', () => {
++    renderWorldSidebar({
++      syncButtonDisabled: true,
++      syncButtonLabel: 'Starting Sync...',
++    })
++
++    expect(screen.getByTestId('world-sync-button')).toBeDisabled()
++    expect(screen.getByTestId('world-sync-button')).toHaveTextContent('Starting Sync...')
++  })
+ })
+ 
+ // ── WorldOverview ─────────────────────────────────────────────────────────
+diff --git a/frontend/editor-app/tests/unit/worldSync.test.js b/frontend/editor-app/tests/unit/worldSync.test.js
+new file mode 100644
+index 0000000..e8e5282
+--- /dev/null
++++ b/frontend/editor-app/tests/unit/worldSync.test.js
+@@ -0,0 +1,82 @@
++import { describe, expect, it } from 'vitest'
++
++import { createContentSnapshot } from '../../src/utils/diffEngine.js'
++import {
++  buildEventsIndexProposePayload,
++  canStartWorldSync,
++  getEventsIndexMarkdown,
++  getWorldSyncButtonState,
++} from '../../src/utils/worldSync.js'
++import { WORKSPACE_TWO_FILES, WORKSPACE_TWO_FILES_MODIFIED } from '../fixtures/diffEngine.js'
++import { buildWorldModelFixture } from '../fixtures/worldModel.js'
++
++describe('worldSync helpers', () => {
++  it('allows a first sync when the workspace has content and sync state is never_synced', () => {
++    const canStartSync = canStartWorldSync(WORKSPACE_TWO_FILES, {
++      status: 'never_synced',
++      lastSyncedAt: null,
++      lastSyncedSnapshot: {},
++    })
++
++    expect(canStartSync).toBe(true)
++  })
++
++  it('builds an events propose payload for first sync', () => {
++    const payload = buildEventsIndexProposePayload(
++      WORKSPACE_TWO_FILES,
++      {
++        status: 'never_synced',
++        lastSyncedAt: null,
++        lastSyncedSnapshot: {},
++      },
++      null,
++    )
++
++    expect(payload.eventsMd).toBe('')
++    expect(payload.diffText).toContain('+++ b/story-structure/chapter-07.story')
++    expect(payload.diffText).toContain('+++ b/notes.story')
++  })
++
++  it('builds an events propose payload from an existing world model', () => {
++    const worldModel = buildWorldModelFixture()
++    const syncState = {
++      status: 'synced',
++      lastSyncedAt: '2026-03-25T12:00:00.000Z',
++      lastSyncedSnapshot: createContentSnapshot(WORKSPACE_TWO_FILES),
++    }
++    const payload = buildEventsIndexProposePayload(WORKSPACE_TWO_FILES_MODIFIED, syncState, worldModel)
++
++    expect(payload.eventsMd).toContain('# Events')
++    expect(payload.eventsMd).toContain('evt_f72bc8fe0f29')
++    expect(payload.diffText).toContain('Saint Alder Chapel')
++  })
++
++  it('renders existing events markdown when a world model is present', () => {
++    const eventsMarkdown = getEventsIndexMarkdown(buildWorldModelFixture())
++
++    expect(eventsMarkdown).toContain('# Events')
++    expect(eventsMarkdown).toContain('evt_f72bc8fe0f29')
++  })
++
++  it('derives CTA state for idle and loading flows', () => {
++    const idleState = getWorldSyncButtonState(WORKSPACE_TWO_FILES, {
++      status: 'never_synced',
++      lastSyncedAt: null,
++      lastSyncedSnapshot: {},
++    }, false)
++    const loadingState = getWorldSyncButtonState(WORKSPACE_TWO_FILES, {
++      status: 'never_synced',
++      lastSyncedAt: null,
++      lastSyncedSnapshot: {},
++    }, true)
++
++    expect(idleState).toEqual({
++      disabled: false,
++      label: 'Sync World Model',
++    })
++    expect(loadingState).toEqual({
++      disabled: true,
++      label: 'Starting Sync...',
++    })
++  })
++})

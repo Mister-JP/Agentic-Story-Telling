@@ -1639,7 +1639,7 @@ backend/
 │   └── prompts.py             # System/user prompt templates (from notebook)
 ├── services/
 │   └── sync_service.py        # Orchestration logic: temp dir setup, agent calls, result extraction
-├── requirements.txt
+├── pyproject.toml
 └── .env                       # API keys
 ```
 
@@ -1699,10 +1699,8 @@ async def propose_events_index(request: EventsIndexProposeRequest):
 cd backend
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-# Create .env with API keys
-echo "GROQ_API_KEY=your_key_here" > .env
-uvicorn main:app --reload --port 8000
+pip install -e .
+python -m uvicorn backend.main:app --reload --port 8000
 ```
 
 **Frontend setup:**

@@ -89,9 +89,58 @@ function filterEntries(entries, query, labelField) {
   return entries.filter((entry) => matchesQuery(entry[labelField] ?? '', query))
 }
 
+function WorldSyncButton({ disabled, label, onStartSync }) {
+  return (
+    <Button
+      className="world-sidebar-sync-button"
+      data-testid="world-sync-button"
+      disabled={disabled}
+      fullWidth
+      onClick={onStartSync}
+      size="sm"
+    >
+      {label}
+    </Button>
+  )
+}
+
+WorldSyncButton.propTypes = {
+  disabled: PropTypes.bool.isRequired,
+  label: PropTypes.string.isRequired,
+  onStartSync: PropTypes.func.isRequired,
+}
+
+function PopulatedWorldSyncBlock({ disabled, label, lastSyncLabel, onStartSync, syncStatusLabel }) {
+  return (
+    <Box className="world-sidebar-sync-block">
+      <WorldSyncButton disabled={disabled} label={label} onStartSync={onStartSync} />
+      <Text className="world-sidebar-sync-status">{syncStatusLabel}</Text>
+      {lastSyncLabel ? (
+        <Text className="world-sidebar-sync-meta">{lastSyncLabel}</Text>
+      ) : null}
+    </Box>
+  )
+}
+
+PopulatedWorldSyncBlock.propTypes = {
+  disabled: PropTypes.bool.isRequired,
+  label: PropTypes.string.isRequired,
+  lastSyncLabel: PropTypes.string,
+  onStartSync: PropTypes.func.isRequired,
+  syncStatusLabel: PropTypes.string.isRequired,
+}
+
 // ── Main sidebar ──────────────────────────────────────────────────────────
 
-function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect }) {
+function WorldSidebar({
+  onStartSync,
+  syncButtonDisabled,
+  syncButtonLabel,
+  worldModel,
+  syncState,
+  worldSelection,
+  onWorldSelect,
+}) {
   const [searchQuery, setSearchQuery] = useState('')
 
   const elementGroups = useMemo(() => {
@@ -114,6 +163,11 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect }) 
   if (!worldModel) {
     return (
       <Stack gap="md" className="world-sidebar-content" data-testid="world-sidebar-empty">
+        <WorldSyncButton
+          disabled={syncButtonDisabled}
+          label={syncButtonLabel}
+          onStartSync={onStartSync}
+        />
         <Text className="topbar-context-meta">
           No world model yet. Write some story content and sync to build your world.
         </Text>
@@ -128,21 +182,13 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect }) 
 
   return (
     <Stack h="100%" gap="sm" className="world-sidebar-content" data-testid="world-sidebar">
-      {/* Sync CTA */}
-      <Box className="world-sidebar-sync-block">
-        <Button
-          className="world-sidebar-sync-button"
-          fullWidth
-          disabled
-          size="sm"
-        >
-          Sync World Model
-        </Button>
-        <Text className="world-sidebar-sync-status">{syncStatusLabel}</Text>
-        {lastSyncLabel ? (
-          <Text className="world-sidebar-sync-meta">{lastSyncLabel}</Text>
-        ) : null}
-      </Box>
+      <PopulatedWorldSyncBlock
+        disabled={syncButtonDisabled}
+        label={syncButtonLabel}
+        lastSyncLabel={lastSyncLabel}
+        onStartSync={onStartSync}
+        syncStatusLabel={syncStatusLabel}
+      />
 
       {/* Search */}
       <TextInput
@@ -226,6 +272,9 @@ function WorldSidebar({ worldModel, syncState, worldSelection, onWorldSelect }) 
 }
 
 WorldSidebar.propTypes = {
+  onStartSync: PropTypes.func.isRequired,
+  syncButtonDisabled: PropTypes.bool.isRequired,
+  syncButtonLabel: PropTypes.string.isRequired,
   worldModel: PropTypes.object,
   syncState: PropTypes.object,
   worldSelection: PropTypes.string,

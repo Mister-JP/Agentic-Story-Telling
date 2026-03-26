@@ -26,16 +26,25 @@ describe('WorldSidebar', () => {
   const worldModel = buildWorldModelFixture()
   const defaultSyncState = { status: 'synced', lastSyncedAt: null, lastSyncedSnapshot: {} }
   const noopSelect = vi.fn()
+  const noopSync = vi.fn()
 
-  it('renders element kind groups with correct labels', () => {
-    renderWithMantine(
+  function renderWorldSidebar(overrideProps = {}) {
+    return renderWithMantine(
       <WorldSidebar
+        onStartSync={noopSync}
+        syncButtonDisabled={false}
+        syncButtonLabel="Sync World Model"
         worldModel={worldModel}
         syncState={defaultSyncState}
         worldSelection={null}
         onWorldSelect={noopSelect}
+        {...overrideProps}
       />,
     )
+  }
+
+  it('renders element kind groups with correct labels', () => {
+    renderWorldSidebar()
 
     // The fixture has persons, places, and items
     expect(screen.getByText(/PERSON/i)).toBeInTheDocument()
@@ -44,14 +53,7 @@ describe('WorldSidebar', () => {
   })
 
   it('renders element names within groups', () => {
-    renderWithMantine(
-      <WorldSidebar
-        worldModel={worldModel}
-        syncState={defaultSyncState}
-        worldSelection={null}
-        onWorldSelect={noopSelect}
-      />,
-    )
+    renderWorldSidebar()
 
     expect(screen.getByText('Mira')).toBeInTheDocument()
     expect(screen.getByText('Arun')).toBeInTheDocument()
@@ -60,14 +62,7 @@ describe('WorldSidebar', () => {
   })
 
   it('renders event chapter groups and summaries', () => {
-    renderWithMantine(
-      <WorldSidebar
-        worldModel={worldModel}
-        syncState={defaultSyncState}
-        worldSelection={null}
-        onWorldSelect={noopSelect}
-      />,
-    )
+    renderWorldSidebar()
 
     // Events are grouped by chapter
     expect(screen.getByText(/Chapter 7/)).toBeInTheDocument()
@@ -75,14 +70,7 @@ describe('WorldSidebar', () => {
   })
 
   it('shows populated dot for elements with detail content and TBD dot for empty ones', () => {
-    renderWithMantine(
-      <WorldSidebar
-        worldModel={worldModel}
-        syncState={defaultSyncState}
-        worldSelection={null}
-        onWorldSelect={noopSelect}
-      />,
-    )
+    renderWorldSidebar()
 
     const allItems = screen.getAllByTestId('world-item')
 
@@ -100,14 +88,7 @@ describe('WorldSidebar', () => {
   it('filters elements and events by search query', async () => {
     const user = userEvent.setup()
 
-    renderWithMantine(
-      <WorldSidebar
-        worldModel={worldModel}
-        syncState={defaultSyncState}
-        worldSelection={null}
-        onWorldSelect={noopSelect}
-      />,
-    )
+    renderWorldSidebar()
 
     const searchInput = screen.getByTestId('world-search-input')
     await user.type(searchInput, 'Mira')
@@ -121,17 +102,23 @@ describe('WorldSidebar', () => {
   })
 
   it('shows empty state when worldModel is null', () => {
-    renderWithMantine(
-      <WorldSidebar
-        worldModel={null}
-        syncState={null}
-        worldSelection={null}
-        onWorldSelect={noopSelect}
-      />,
-    )
+    renderWorldSidebar({
+      worldModel: null,
+      syncState: null,
+    })
 
     expect(screen.getByTestId('world-sidebar-empty')).toBeInTheDocument()
     expect(screen.getByText(/no world model yet/i)).toBeInTheDocument()
+  })
+
+  it('renders the sync button with the provided CTA state', () => {
+    renderWorldSidebar({
+      syncButtonDisabled: true,
+      syncButtonLabel: 'Starting Sync...',
+    })
+
+    expect(screen.getByTestId('world-sync-button')).toBeDisabled()
+    expect(screen.getByTestId('world-sync-button')).toHaveTextContent('Starting Sync...')
   })
 })
 

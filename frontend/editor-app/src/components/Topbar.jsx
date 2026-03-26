@@ -131,7 +131,10 @@ function Topbar({
       </div>
 
       {projectStatus ? (
-        <Text className={`project-status${projectStatus.kind === 'error' ? ' is-error' : ''}`}>
+        <Text
+          className={`project-status${projectStatus.kind === 'error' ? ' is-error' : ''}`}
+          data-testid="project-status-message"
+        >
           {projectStatus.message}
         </Text>
       ) : null}

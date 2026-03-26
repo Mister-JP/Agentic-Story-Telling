@@ -1,19 +1,31 @@
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentic-story-telling"
 version = "0.1.0"
 description = "Agentic world-model harness for fiction writing"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "fastapi>=0.111,<1.0",
+    "pydantic>=2.0,<3.0",
+    "uvicorn>=0.30,<1.0",
+]
 
 [project.optional-dependencies]
 test = [
+    "httpx>=0.28",
     "pytest>=8.0",
     "pytest-cov>=5.0",
 ]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["backend*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

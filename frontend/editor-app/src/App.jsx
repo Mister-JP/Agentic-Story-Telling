@@ -5,7 +5,12 @@ import EditorPane from './components/EditorPane.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import Topbar from './components/Topbar.jsx'
 import WorldPanel from './components/WorldPanel.jsx'
+import { ApiClientError, proposeEventsIndex } from './utils/agentApi.js'
 import { getSyncBadgeProps } from './utils/syncSelectors.js'
+import {
+  buildEventsIndexProposePayload,
+  getWorldSyncButtonState,
+} from './utils/worldSync.js'
 import WorkspaceDialog from './components/WorkspaceDialog.jsx'
 import {
   DEFAULT_FILE_ID,
@@ -72,6 +77,20 @@ function getPathNodes(workspace, selectedId) {
     .filter(Boolean)
 }
 
+function buildWorldSyncSuccessMessage(proposal) {
+  const proposedDeltaCount = proposal?.deltas?.length ?? 0
+  const deltaLabel = proposedDeltaCount === 1 ? 'proposal' : 'proposals'
+  return `Backend contract reachable. Received ${proposedDeltaCount} stub event ${deltaLabel}.`
+}
+
+function getWorldSyncErrorMessage(error) {
+  if (error instanceof ApiClientError) {
+    return error.message
+  }
+
+  return 'Failed to start world sync.'
+}
+
 const INITIAL_SYNC_STATE = {
   status: 'never_synced',
   lastSyncedAt: null,
@@ -93,10 +112,15 @@ function App() {
     key: 'editor-app-sync-state-v1',
     defaultValue: INITIAL_SYNC_STATE,
   })
+  const [isWorldSyncLoading, setIsWorldSyncLoading] = useState(false)
 
   const syncBadgeProps = useMemo(
     () => getSyncBadgeProps(syncState, workspace),
     [syncState, workspace],
+  )
+  const worldSyncButtonState = useMemo(
+    () => getWorldSyncButtonState(workspace, syncState, isWorldSyncLoading),
+    [workspace, syncState, isWorldSyncLoading],
   )
   const [viewMode, setViewMode] = useState('write')
   const [worldSelection, setWorldSelection] = useState(null)
@@ -354,6 +378,43 @@ function App() {
     setWorkspace((current) => updateFileContent(current, fileId, content))
   }
 
+  const handleStartWorldSync = async () => {
+    if (isWorldSyncLoading) {
+      return
+    }
+
+    if (worldSyncButtonState.disabled) {
+      setProjectStatus({
+        kind: 'error',
+        message: 'Write or change some story content before starting a world sync.',
+      })
+      return
+    }
+
+    setProjectStatus(null)
+    setIsWorldSyncLoading(true)
+
+    try {
+      const { diffText, eventsMd } = buildEventsIndexProposePayload(workspace, syncState, worldModel)
+      const response = await proposeEventsIndex({
+        diff_text: diffText,
+        events_md: eventsMd,
+        history: [],
+      })
+      setProjectStatus({
+        kind: 'success',
+        message: buildWorldSyncSuccessMessage(response?.proposal),
+      })
+    } catch (error) {
+      setProjectStatus({
+        kind: 'error',
+        message: getWorldSyncErrorMessage(error),
+      })
+    } finally {
+      setIsWorldSyncLoading(false)
+    }
+  }
+
   const handleDialogSubmit = (event) => {
     event.preventDefault()
 
@@ -469,10 +530,13 @@ function App() {
         <Box className="sidebar-shell">
           <Sidebar
             createTargetId={sidebarCreateTargetId}
+            onStartSync={handleStartWorldSync}
             onDownloadProject={handleDownloadProject}
             onOpenDialog={openDialog}
             onUploadProject={handleUploadProject}
             projectAction={projectAction}
+            syncButtonDisabled={worldSyncButtonState.disabled}
+            syncButtonLabel={worldSyncButtonState.label}
             tree={tree}
             viewMode={viewMode}
             onViewModeChange={handleViewModeChange}

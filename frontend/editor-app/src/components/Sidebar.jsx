@@ -195,10 +195,13 @@ WriteSidebarContent.propTypes = {
 
 function Sidebar({
   createTargetId,
+  onStartSync,
   onDownloadProject,
   onOpenDialog,
   onUploadProject,
   projectAction,
+  syncButtonDisabled,
+  syncButtonLabel,
   tree,
   viewMode,
   onViewModeChange,
@@ -237,6 +240,9 @@ function Sidebar({
           />
         ) : (
           <WorldSidebar
+            onStartSync={onStartSync}
+            syncButtonDisabled={syncButtonDisabled}
+            syncButtonLabel={syncButtonLabel}
             worldModel={worldModel}
             syncState={syncState}
             worldSelection={worldSelection}
@@ -250,10 +256,13 @@ function Sidebar({
 
 Sidebar.propTypes = {
   createTargetId: PropTypes.string.isRequired,
+  onStartSync: PropTypes.func.isRequired,
   onDownloadProject: PropTypes.func.isRequired,
   onOpenDialog: PropTypes.func.isRequired,
   onUploadProject: PropTypes.func.isRequired,
   projectAction: PropTypes.string,
+  syncButtonDisabled: PropTypes.bool.isRequired,
+  syncButtonLabel: PropTypes.string.isRequired,
   tree: PropTypes.object.isRequired,
   viewMode: PropTypes.oneOf(['write', 'world']).isRequired,
   onViewModeChange: PropTypes.func.isRequired,

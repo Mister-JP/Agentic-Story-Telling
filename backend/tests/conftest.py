@@ -3,12 +3,18 @@ pytest fixtures for the story/ world-model data.
 These fixtures read the actual files from disk — they act as both test
 helpers and live regression guards for the world-model markdown files.
 """
-import pytest
+import sys
 from pathlib import Path
 
-# Repo root is two levels up from this file:  tests/ -> repo root
-REPO_ROOT = Path(__file__).parent.parent
+import pytest
+
+# Repo root is two levels up from backend/tests/: backend/tests -> backend -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_SRC = REPO_ROOT / "backend" / "src"
 STORY_DIR = REPO_ROOT / "story"
+
+if str(BACKEND_SRC) not in sys.path:
+    sys.path.insert(0, str(BACKEND_SRC))
 
 
 @pytest.fixture(scope="session")

@@ -10,6 +10,7 @@ playwright/.cache/
 **/.ipynb_checkpoints/
 
 # Secrets and local env (use env vars or a secrets manager)
+*/.venv
 .env
 .env.*
 !.env.example
