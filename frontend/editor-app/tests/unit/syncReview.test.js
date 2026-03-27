@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest'
 import { WORKSPACE_TWO_FILES } from '../fixtures/diffEngine.js'
 import { buildWorldModelFixture } from '../fixtures/worldModel.js'
 import {
-  applyEventsIndexReviewResult,
-  createEventsIndexReviewSession,
+  applyStagedIndexReviewResult,
+  createElementsIndexReviewSession,
+  createIndexReviewSession,
   createReviewHistoryEntry,
+  getReviewAttemptNumber,
 } from '../../src/utils/syncReview.js'
-import { getEventsIndexMarkdown } from '../../src/utils/worldSync.js'
+import { getElementsIndexMarkdown, getEventsIndexMarkdown } from '../../src/utils/worldSync.js'
 
 describe('syncReview helpers', () => {
   it('builds an events review session from the current workspace diff', () => {
-    const reviewSession = createEventsIndexReviewSession(
+    const reviewSession = createIndexReviewSession(
       WORKSPACE_TWO_FILES,
       {
         status: 'never_synced',
@@ -22,7 +24,9 @@ describe('syncReview helpers', () => {
     )
 
     expect(reviewSession.step).toBe('events-index')
+    expect(reviewSession.attemptNumber).toBe(1)
     expect(reviewSession.changedFiles).toHaveLength(3)
+    expect(reviewSession.elementsMd).toBe('')
     expect(reviewSession.selectedFileIds).toHaveLength(3)
     expect(reviewSession.selectedFileIds).toEqual(
       expect.arrayContaining(['chapter-07', 'chapter-08', 'notes-file']),
@@ -50,8 +54,58 @@ describe('syncReview helpers', () => {
     })
   })
 
-  it('applies events review output into a new world model and sync snapshot', () => {
-    const appliedReview = applyEventsIndexReviewResult({
+  it('creates the stage-2 review session after events apply output is staged', () => {
+    const currentSession = createIndexReviewSession(
+      WORKSPACE_TWO_FILES,
+      {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      null,
+    )
+    const carriedHistory = [
+      createReviewHistoryEntry(
+        {
+          scan_summary: 'First attempt',
+          deltas: [{ action: 'create', summary: 'Stub event' }],
+        },
+        'Tighten the chronology language.',
+        1,
+      ),
+    ]
+
+    const reviewSession = createElementsIndexReviewSession(
+      {
+        ...currentSession,
+        history: carriedHistory,
+      },
+      {
+        actions: ['Created event evt_stub123.'],
+        detail_files: {
+          evt_stub123: '# Stub event\n\n## Core Understanding\nStub detail\n',
+        },
+        events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
+      },
+    )
+
+    expect(reviewSession.step).toBe('elements-index')
+    expect(reviewSession.attemptNumber).toBe(1)
+    expect(reviewSession.updatedEventsState.actions).toEqual(['Created event evt_stub123.'])
+    expect(reviewSession.history).toEqual(carriedHistory)
+    expect(reviewSession.historyBaseCount).toBe(1)
+    expect(reviewSession.isLoading).toBe(true)
+  })
+
+  it('computes attempt numbers relative to the current review stage', () => {
+    expect(getReviewAttemptNumber([], 0)).toBe(1)
+    expect(getReviewAttemptNumber([{ attempt_number: 1 }], 0)).toBe(2)
+    expect(getReviewAttemptNumber([{ attempt_number: 1 }], 1)).toBe(1)
+    expect(getReviewAttemptNumber([{ attempt_number: 1 }, { attempt_number: 2 }], 1)).toBe(2)
+  })
+
+  it('applies staged events and elements output into a new world model and sync snapshot', () => {
+    const appliedReview = applyStagedIndexReviewResult({
       currentSyncState: {
         status: 'never_synced',
         lastSyncedAt: null,
@@ -65,11 +119,26 @@ describe('syncReview helpers', () => {
         },
         events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
       },
+      elementsApplyResponse: {
+        actions: ['Created element elt_stub123: Cloth Bundle (item).'],
+        detail_files: {
+          elt_stub123: '# Cloth Bundle\n\n## Core Understanding\nStub detail\n',
+        },
+        elements_md: '# Elements\n\n## Entries\n- item | Cloth Bundle | elt_stub123 | cloth bundle | altar evidence\n',
+      },
       selectedFileIds: ['chapter-07'],
       workspace: WORKSPACE_TWO_FILES,
     })
 
-    expect(appliedReview.worldModel.elements.entries).toEqual([])
+    expect(appliedReview.worldModel.elements.entries).toEqual([
+      {
+        kind: 'item',
+        display_name: 'Cloth Bundle',
+        uuid: 'elt_stub123',
+        aliases: 'cloth bundle',
+        identification_keys: 'altar evidence',
+      },
+    ])
     expect(appliedReview.worldModel.events.entries).toEqual([
       {
         uuid: 'evt_stub123',
@@ -79,6 +148,7 @@ describe('syncReview helpers', () => {
       },
     ])
     expect(appliedReview.worldModel.events.details.evt_stub123).toContain('Stub detail')
+    expect(appliedReview.worldModel.elements.details.elt_stub123).toContain('Stub detail')
     expect(appliedReview.syncState.status).toBe('synced')
     expect(appliedReview.syncState.lastSyncedSnapshot).toEqual({
       'chapter-07': {
@@ -89,10 +159,10 @@ describe('syncReview helpers', () => {
     })
   })
 
-  it('preserves elements while replacing the events layer from apply output', () => {
+  it('preserves events while replacing the elements layer from staged apply output', () => {
     const currentWorldModel = buildWorldModelFixture()
 
-    const appliedReview = applyEventsIndexReviewResult({
+    const appliedReview = applyStagedIndexReviewResult({
       currentSyncState: {
         status: 'synced',
         lastSyncedAt: '2026-03-25T12:00:00.000Z',
@@ -100,27 +170,33 @@ describe('syncReview helpers', () => {
       },
       currentWorldModel,
       eventsApplyResponse: {
-        actions: ['Updated event evt_f72bc8fe0f29.'],
+        actions: [],
         detail_files: {},
-        events_md: '# Events\n\n## Entries\n- evt_f72bc8fe0f29 | Late June, 1998, before sunrise | Chapter 7 | Revised event summary\n',
+        events_md: getEventsIndexMarkdown(currentWorldModel),
+      },
+      elementsApplyResponse: {
+        actions: ['Updated element elt_45d617e4531b: Mira — merged aliases.'],
+        detail_files: {},
+        elements_md: '# Elements\n\n## Entries\n- person | Mira | elt_45d617e4531b | Mira, Mira Vale | carries the silver key\n',
       },
       selectedFileIds: ['chapter-07'],
       workspace: WORKSPACE_TWO_FILES,
     })
 
-    expect(appliedReview.worldModel.elements.entries).toHaveLength(currentWorldModel.elements.entries.length)
-    expect(appliedReview.worldModel.events.entries).toEqual([
+    expect(appliedReview.worldModel.events.entries).toHaveLength(currentWorldModel.events.entries.length)
+    expect(appliedReview.worldModel.elements.entries).toEqual([
       {
-        uuid: 'evt_f72bc8fe0f29',
-        when: 'Late June, 1998, before sunrise',
-        chapters: 'Chapter 7',
-        summary: 'Revised event summary',
+        kind: 'person',
+        display_name: 'Mira',
+        uuid: 'elt_45d617e4531b',
+        aliases: 'Mira, Mira Vale',
+        identification_keys: 'carries the silver key',
       },
     ])
   })
 
-  it('keeps the events heading when apply output returns an empty index', () => {
-    const appliedReview = applyEventsIndexReviewResult({
+  it('keeps the elements heading when staged apply output returns an empty index', () => {
+    const appliedReview = applyStagedIndexReviewResult({
       currentSyncState: {
         status: 'never_synced',
         lastSyncedAt: null,
@@ -132,11 +208,16 @@ describe('syncReview helpers', () => {
         detail_files: {},
         events_md: '',
       },
+      elementsApplyResponse: {
+        actions: [],
+        detail_files: {},
+        elements_md: '',
+      },
       selectedFileIds: ['chapter-07'],
       workspace: WORKSPACE_TWO_FILES,
     })
 
-    expect(appliedReview.worldModel.events.indexPreamble).toBe('# Events')
-    expect(getEventsIndexMarkdown(appliedReview.worldModel)).toContain('# Events')
+    expect(appliedReview.worldModel.elements.indexPreamble).toBe('# Elements')
+    expect(getElementsIndexMarkdown(appliedReview.worldModel)).toContain('# Elements')
   })
 })

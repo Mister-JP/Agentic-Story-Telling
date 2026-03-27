@@ -3,21 +3,16 @@ import {
   createContentSnapshot,
   getChangedFiles,
 } from './diffEngine.js'
+import { DEFAULT_ELEMENTS_INDEX_PREAMBLE, ELEMENT_FIELD_NAMES } from './elementsIndexFields.js'
 import { DEFAULT_EVENTS_INDEX_PREAMBLE, EVENT_FIELD_NAMES } from './eventsIndexFields.js'
 import { renderIndexMarkdown } from './worldModel.js'
 
 const NEVER_SYNCED_STATUS = 'never_synced'
 const DEFAULT_SYNC_BUTTON_LABEL = 'Sync World Model'
 const LOADING_SYNC_BUTTON_LABEL = 'Starting Sync...'
-function getInitialSyncFileChanges(currentSnapshot) {
-  return Object.entries(currentSnapshot)
-    .filter(([, fileSnapshot]) => fileSnapshot.markdown.trim() !== '')
-    .map(([fileId, fileSnapshot]) => ({
-      fileId,
-      fileName: fileSnapshot.name,
-      filePath: fileSnapshot.path,
-      status: 'added',
-    }))
+
+function isNeverSynced(syncState) {
+  return syncState?.status === NEVER_SYNCED_STATUS
 }
 
 function getChangedFilesForSnapshot(
@@ -25,10 +20,6 @@ function getChangedFilesForSnapshot(
   syncState,
   lastSyncedSnapshot = getLastSyncedSnapshot(syncState),
 ) {
-  if (syncState?.status === NEVER_SYNCED_STATUS) {
-    return getInitialSyncFileChanges(currentSnapshot)
-  }
-
   return getChangedFiles(currentSnapshot, lastSyncedSnapshot)
 }
 
@@ -37,7 +28,7 @@ function getSelectedFileIdentifiers(changedFiles) {
 }
 
 function getLastSyncedSnapshot(syncState) {
-  if (syncState?.status === NEVER_SYNCED_STATUS) {
+  if (isNeverSynced(syncState)) {
     return {}
   }
 
@@ -57,6 +48,22 @@ export function getEventsIndexMarkdown(worldModel) {
     indexPreamble,
     worldModel.events.entries,
     EVENT_FIELD_NAMES,
+  )
+}
+
+export function getElementsIndexMarkdown(worldModel) {
+  if (!worldModel?.elements) {
+    return ''
+  }
+
+  const indexPreamble = worldModel.elements.indexPreamble?.trim()
+    ? worldModel.elements.indexPreamble
+    : DEFAULT_ELEMENTS_INDEX_PREAMBLE
+
+  return renderIndexMarkdown(
+    indexPreamble,
+    worldModel.elements.entries,
+    ELEMENT_FIELD_NAMES,
   )
 }
 
@@ -80,6 +87,7 @@ export function buildWorldSyncDraft(workspace, syncState, worldModel) {
   return {
     changedFiles,
     diffText,
+    elementsMd: getElementsIndexMarkdown(worldModel),
     eventsMd: getEventsIndexMarkdown(worldModel),
     selectedFileIds,
   }

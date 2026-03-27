@@ -17,12 +17,14 @@ from backend.schemas import (
     EventsIndexProposeRequest,
     EventsIndexProposeResponse,
 )
+from backend.services.elements_index_logic import (
+    apply_elements_proposal,
+    propose_elements_index_with_audit,
+)
 from backend.services.stub_payloads import (
     build_element_detail_result,
-    build_elements_apply_result,
     build_event_detail_result,
     build_events_apply_result,
-    build_stub_elements_proposal,
     build_stub_event_agent_output,
 )
 from backend.temp_storage import LayerContent, validate_layer_name
@@ -58,11 +60,15 @@ class StubHarnessService:
         )
 
     def propose_elements_index(self, request: ElementsIndexProposeRequest) -> ElementsIndexProposeResponse:
-        proposal = build_stub_elements_proposal(request.diff_text)
+        proposal = propose_elements_index_with_audit(
+            request.diff_text,
+            request.elements_md,
+            request.history,
+        )
         return ElementsIndexProposeResponse(proposal=proposal)
 
     def apply_elements_index(self, request: ElementsIndexApplyRequest) -> ElementsIndexApplyResponse:
-        apply_result = build_elements_apply_result(request.elements_md, request.proposal)
+        apply_result = apply_elements_proposal(request.elements_md, request.proposal)
         normalized_content = normalize_layer_content("elements", apply_result.index_markdown, apply_result.detail_files)
         return ElementsIndexApplyResponse(
             elements_md=normalized_content.index_markdown,

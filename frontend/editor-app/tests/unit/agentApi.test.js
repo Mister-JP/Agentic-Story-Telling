@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ApiClientError,
+  applyElementsIndex,
   applyEventsIndex,
+  proposeElementsIndex,
   proposeEventsIndex,
 } from '../../src/utils/agentApi.js'
 
@@ -67,6 +69,69 @@ describe('agentApi', () => {
       }),
     )
     expect(responseBody.detail_files.evt_stub123).toBe('# Stub event')
+  })
+
+  it('posts to the elements propose endpoint and returns the proposal payload', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        proposal: {
+          diff_summary: 'Deterministic summary',
+          rationale: 'Deterministic rationale',
+          identified_elements: [],
+          approval_message: 'Review the proposal.',
+        },
+      }),
+    })
+
+    const responseBody = await proposeElementsIndex({
+      diff_text: '+ Added line',
+      elements_md: '# Elements',
+      history: [],
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/elements-index/propose'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.proposal.diff_summary).toBe('Deterministic summary')
+  })
+
+  it('posts to the elements apply endpoint and returns the apply payload', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        actions: ['Created element elt_stub123: Cloth Bundle (item).'],
+        detail_files: {
+          elt_stub123: '# Cloth Bundle',
+        },
+        elements_md: '# Elements\n\n## Entries\n- item | Cloth Bundle | elt_stub123 | cloth bundle | altar evidence\n',
+      }),
+    })
+
+    const responseBody = await applyElementsIndex({
+      elements_md: '# Elements',
+      proposal: {
+        diff_summary: 'Deterministic summary',
+        rationale: 'Deterministic rationale',
+        identified_elements: [],
+        approval_message: 'Review the proposal.',
+      },
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/elements-index/apply'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.detail_files.elt_stub123).toBe('# Cloth Bundle')
   })
 
   it('throws a typed ApiClientError for structured error responses', async () => {

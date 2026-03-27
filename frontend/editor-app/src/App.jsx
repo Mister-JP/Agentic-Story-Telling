@@ -8,13 +8,17 @@ import Topbar from './components/Topbar.jsx'
 import WorldPanel from './components/WorldPanel.jsx'
 import {
   ApiClientError,
+  applyElementsIndex,
   applyEventsIndex,
+  proposeElementsIndex,
   proposeEventsIndex,
 } from './utils/agentApi.js'
 import {
-  applyEventsIndexReviewResult,
-  createEventsIndexReviewSession,
+  applyStagedIndexReviewResult,
+  createElementsIndexReviewSession,
+  createIndexReviewSession,
   createReviewHistoryEntry,
+  getReviewAttemptNumber,
 } from './utils/syncReview.js'
 import { getSyncBadgeProps } from './utils/syncSelectors.js'
 import { getWorldSyncButtonState } from './utils/worldSync.js'
@@ -116,6 +120,7 @@ function App() {
   const [isWorldSyncLoading, setIsWorldSyncLoading] = useState(false)
   const [reviewSession, setReviewSession] = useState(null)
   const reviewGenerationRef = useRef(0)
+  const reviewActionLockRef = useRef(null)
   const workspaceRef = useRef(workspace)
   const worldModelRef = useRef(worldModel)
   const syncStateRef = useRef(syncState)
@@ -398,17 +403,58 @@ function App() {
     })
   }, [])
 
+  const requestElementsIndexProposal = useCallback(async ({ diffText, elementsMd, history }) => {
+    return proposeElementsIndex({
+      diff_text: diffText,
+      elements_md: elementsMd,
+      history,
+    })
+  }, [])
+
+  const requestIndexProposalForStep = useCallback(async ({ elementsMd, eventsMd, diffText, history, step }) => {
+    if (step === 'elements-index') {
+      return requestElementsIndexProposal({
+        diffText,
+        elementsMd,
+        history,
+      })
+    }
+
+    return requestEventsIndexProposal({
+      diffText,
+      eventsMd,
+      history,
+    })
+  }, [requestElementsIndexProposal, requestEventsIndexProposal])
+
+  const tryLockReviewAction = useCallback((actionName) => {
+    if (reviewActionLockRef.current !== null) {
+      return false
+    }
+
+    reviewActionLockRef.current = actionName
+    return true
+  }, [])
+
+  const releaseReviewAction = useCallback((actionName) => {
+    if (reviewActionLockRef.current === actionName) {
+      reviewActionLockRef.current = null
+    }
+  }, [])
+
   const handleDiscardReview = useCallback(() => {
     reviewGenerationRef.current += 1
+    reviewActionLockRef.current = null
     setIsWorldSyncLoading(false)
     setReviewSession(null)
     setViewMode('world')
   }, [])
 
-  const handleRetryEventsIndexProposal = useCallback(async () => {
+  const handleRetryIndexProposal = useCallback(async () => {
     const activeReviewSession = reviewSessionRef.current
+    const actionName = 'retry-index-proposal'
 
-    if (!activeReviewSession) {
+    if (!activeReviewSession || !tryLockReviewAction(actionName)) {
       return
     }
 
@@ -429,10 +475,12 @@ function App() {
     })
 
     try {
-      const response = await requestEventsIndexProposal({
+      const response = await requestIndexProposalForStep({
         diffText: activeReviewSession.diffText,
+        elementsMd: activeReviewSession.elementsMd,
         eventsMd: activeReviewSession.eventsMd,
         history: activeReviewSession.history,
+        step: activeReviewSession.step,
       })
 
       if (reviewGenerationRef.current !== reviewGeneration) {
@@ -446,7 +494,7 @@ function App() {
 
         return {
           ...current,
-          attemptNumber: current.history.length + 1,
+          attemptNumber: getReviewAttemptNumber(current.history, current.historyBaseCount),
           currentProposal: response.proposal,
           error: null,
           isLoading: false,
@@ -470,10 +518,14 @@ function App() {
           loadingAction: null,
         }
       })
+    } finally {
+      releaseReviewAction(actionName)
     }
-  }, [requestEventsIndexProposal])
+  }, [releaseReviewAction, requestIndexProposalForStep, tryLockReviewAction])
 
   const handleStartWorldSync = useCallback(async () => {
+    const actionName = 'start-world-sync'
+
     if (isWorldSyncLoading) {
       return
     }
@@ -486,20 +538,26 @@ function App() {
       return
     }
 
+    if (!tryLockReviewAction(actionName)) {
+      return
+    }
+
     setProjectStatus(null)
     setIsWorldSyncLoading(true)
 
     const reviewGeneration = reviewGenerationRef.current + 1
     reviewGenerationRef.current = reviewGeneration
-    const nextReviewSession = createEventsIndexReviewSession(workspace, syncState, worldModel)
+    const nextReviewSession = createIndexReviewSession(workspace, syncState, worldModel)
     setReviewSession(nextReviewSession)
     setViewMode('review')
 
     try {
-      const response = await requestEventsIndexProposal({
+      const response = await requestIndexProposalForStep({
         diffText: nextReviewSession.diffText,
+        elementsMd: nextReviewSession.elementsMd,
         eventsMd: nextReviewSession.eventsMd,
         history: [],
+        step: nextReviewSession.step,
       })
 
       if (reviewGenerationRef.current !== reviewGeneration) {
@@ -513,7 +571,7 @@ function App() {
 
         return {
           ...current,
-          attemptNumber: 1,
+          attemptNumber: getReviewAttemptNumber(current.history, current.historyBaseCount),
           currentProposal: response.proposal,
           error: null,
           isLoading: false,
@@ -541,11 +599,14 @@ function App() {
       if (reviewGenerationRef.current === reviewGeneration) {
         setIsWorldSyncLoading(false)
       }
+      releaseReviewAction(actionName)
     }
   }, [
     isWorldSyncLoading,
-    requestEventsIndexProposal,
+    releaseReviewAction,
+    requestIndexProposalForStep,
     syncState,
+    tryLockReviewAction,
     worldModel,
     workspace,
     worldSyncButtonState.disabled,
@@ -553,8 +614,9 @@ function App() {
 
   const handleRequestReviewChanges = useCallback(async (reviewerFeedback) => {
     const activeReviewSession = reviewSessionRef.current
+    const actionName = 'request-review-changes'
 
-    if (!activeReviewSession?.currentProposal) {
+    if (!activeReviewSession?.currentProposal || !tryLockReviewAction(actionName)) {
       return
     }
 
@@ -584,10 +646,12 @@ function App() {
     reviewGenerationRef.current = reviewGeneration
 
     try {
-      const response = await requestEventsIndexProposal({
+      const response = await requestIndexProposalForStep({
         diffText: activeReviewSession.diffText,
+        elementsMd: activeReviewSession.elementsMd,
         eventsMd: activeReviewSession.eventsMd,
         history: nextHistory,
+        step: activeReviewSession.step,
       })
 
       if (reviewGenerationRef.current !== reviewGeneration) {
@@ -601,7 +665,7 @@ function App() {
 
         return {
           ...current,
-          attemptNumber: nextHistory.length + 1,
+          attemptNumber: getReviewAttemptNumber(nextHistory, current.historyBaseCount),
           currentProposal: response.proposal,
           error: null,
           history: nextHistory,
@@ -626,13 +690,16 @@ function App() {
           loadingAction: null,
         }
       })
+    } finally {
+      releaseReviewAction(actionName)
     }
-  }, [requestEventsIndexProposal])
+  }, [releaseReviewAction, requestIndexProposalForStep, tryLockReviewAction])
 
-  const handleApproveEventsIndexReview = useCallback(async () => {
+  const handleApproveIndexReview = useCallback(async () => {
     const activeReviewSession = reviewSessionRef.current
+    const actionName = 'approve-index-review'
 
-    if (!activeReviewSession?.currentProposal) {
+    if (!activeReviewSession?.currentProposal || !tryLockReviewAction(actionName)) {
       return
     }
 
@@ -649,34 +716,101 @@ function App() {
       }
     })
 
-    const reviewGeneration = reviewGenerationRef.current
+    const reviewGeneration = reviewGenerationRef.current + 1
+    reviewGenerationRef.current = reviewGeneration
 
     try {
-      const applyResponse = await applyEventsIndex({
+      if (activeReviewSession.step === 'elements-index') {
+        const applyResponse = await applyElementsIndex({
+          elements_md: activeReviewSession.elementsMd,
+          proposal: activeReviewSession.currentProposal,
+        })
+        const appliedReview = applyStagedIndexReviewResult({
+          currentSyncState: syncStateRef.current,
+          currentWorldModel: worldModelRef.current,
+          elementsApplyResponse: applyResponse,
+          eventsApplyResponse: activeReviewSession.updatedEventsState,
+          selectedFileIds: activeReviewSession.selectedFileIds,
+          workspace: workspaceRef.current,
+        })
+
+        if (reviewGenerationRef.current !== reviewGeneration) {
+          return
+        }
+
+        setWorldModel(appliedReview.worldModel)
+        setSyncState(appliedReview.syncState)
+        setProjectStatus({
+          kind: 'success',
+          message: 'World model updated from the review.',
+        })
+        setReviewSession(null)
+        setViewMode('world')
+        return
+      }
+
+      const eventsApplyResponse = await applyEventsIndex({
         events_md: activeReviewSession.eventsMd,
         proposal: activeReviewSession.currentProposal,
-      })
-
-      const appliedReview = applyEventsIndexReviewResult({
-        currentSyncState: syncStateRef.current,
-        currentWorldModel: worldModelRef.current,
-        eventsApplyResponse: applyResponse,
-        selectedFileIds: activeReviewSession.selectedFileIds,
-        workspace: workspaceRef.current,
       })
 
       if (reviewGenerationRef.current !== reviewGeneration) {
         return
       }
 
-      setWorldModel(appliedReview.worldModel)
-      setSyncState(appliedReview.syncState)
-      setProjectStatus({
-        kind: 'success',
-        message: 'World model updated from the events review.',
-      })
-      setReviewSession(null)
-      setViewMode('world')
+      const nextReviewGeneration = reviewGenerationRef.current + 1
+      reviewGenerationRef.current = nextReviewGeneration
+      const nextReviewSession = createElementsIndexReviewSession(
+        activeReviewSession,
+        eventsApplyResponse,
+      )
+      setReviewSession(nextReviewSession)
+
+      try {
+        const response = await requestIndexProposalForStep({
+          diffText: nextReviewSession.diffText,
+          elementsMd: nextReviewSession.elementsMd,
+          eventsMd: nextReviewSession.eventsMd,
+          history: nextReviewSession.history,
+          step: nextReviewSession.step,
+        })
+
+        if (reviewGenerationRef.current !== nextReviewGeneration) {
+          return
+        }
+
+        setReviewSession((current) => {
+          if (!current) {
+            return current
+          }
+
+          return {
+            ...current,
+            attemptNumber: getReviewAttemptNumber(current.history, current.historyBaseCount),
+            currentProposal: response.proposal,
+            error: null,
+            isLoading: false,
+            loadingAction: null,
+          }
+        })
+      } catch (error) {
+        if (reviewGenerationRef.current !== nextReviewGeneration) {
+          return
+        }
+
+        setReviewSession((current) => {
+          if (!current) {
+            return current
+          }
+
+          return {
+            ...current,
+            error: getWorldSyncErrorMessage(error),
+            isLoading: false,
+            loadingAction: null,
+          }
+        })
+      }
     } catch (error) {
       if (reviewGenerationRef.current !== reviewGeneration) {
         return
@@ -694,8 +828,10 @@ function App() {
           loadingAction: null,
         }
       })
+    } finally {
+      releaseReviewAction(actionName)
     }
-  }, [setSyncState, setWorldModel])
+  }, [releaseReviewAction, requestIndexProposalForStep, setSyncState, setWorldModel, tryLockReviewAction])
 
   const handleDialogSubmit = (event) => {
     event.preventDefault()
@@ -836,6 +972,7 @@ function App() {
           <Topbar
             projectAction={projectAction}
             projectStatus={projectStatus}
+            reviewStep={reviewSession?.step || undefined}
             selectedPathNames={selectedPathNames}
             selectionMode={selectionMode}
             selectedNode={selectedNode}
@@ -865,9 +1002,9 @@ function App() {
 
           {viewMode === 'review' ? (
             <SyncReviewPanel
-              onApprove={handleApproveEventsIndexReview}
+              onApprove={handleApproveIndexReview}
               onRequestChanges={handleRequestReviewChanges}
-              onRetry={handleRetryEventsIndexProposal}
+              onRetry={handleRetryIndexProposal}
               reviewSession={reviewSession}
             />
           ) : null}

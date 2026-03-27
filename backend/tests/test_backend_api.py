@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from backend.dependencies import get_harness_service
 from backend.errors import ApiError
 from backend.main import create_app
+from backend.schemas import ElementDecision, ElementKind
+from backend.services.stub_payloads import build_element_detail_file
 
 
 def build_client(service_override=None, raise_server_exceptions=True) -> TestClient:
@@ -117,6 +119,7 @@ def test_all_stub_routes_return_successful_contract_shapes() -> None:
 
         assert response.status_code == 200
         assert response_key in response_body
+        assert response_body[response_key] is not None
 
 
 def test_events_index_propose_returns_stub_delta_with_diff_evidence() -> None:
@@ -197,6 +200,26 @@ def test_element_detail_uses_aliases_from_index_markdown() -> None:
     assert "- Aliases: Mira, Sister Mira" in response_body["updated_detail_md"]
 
 
+def test_stub_element_detail_file_uses_dash_when_identification_keys_are_empty() -> None:
+    detail_markdown = build_element_detail_file(
+        "elt_stub123",
+        ElementDecision(
+            display_name="Stubbed Story Element",
+            kind=ElementKind.CONCEPT,
+            aliases=[],
+            identification_keys=[],
+            snapshot="Deterministic stub element.",
+            update_instruction="Track the stub detail.",
+            evidence_from_diff=[],
+            matched_existing_display_name=None,
+            matched_existing_uuid=None,
+            is_new=True,
+        ),
+    )
+
+    assert "- Identification keys: -" in detail_markdown
+
+
 def test_event_detail_uses_when_and_chapters_from_index_markdown() -> None:
     client = build_client()
     payload = build_detail_payload("event")
@@ -225,6 +248,40 @@ def test_validation_errors_use_the_shared_error_envelope() -> None:
     assert response_body["retryable"] is False
 
 
+def test_elements_index_propose_returns_parse_error_for_blank_uuid_entries() -> None:
+    client = build_client()
+    payload = build_elements_index_propose_payload()
+    payload["elements_md"] = (
+        "# Elements\n\n## Entries\n"
+        "- item | Broken Entry |  | broken alias | malformed identifier\n"
+    )
+
+    response = client.post("/harness/elements-index/propose", json=payload)
+    response_body = response.json()
+
+    assert response.status_code == 500
+    assert response_body["error"] == "parse_error"
+    assert response_body["retryable"] is False
+    assert response_body["details"] == ['Element index entry "Broken Entry" is missing a UUID.']
+
+
+def test_elements_index_apply_returns_parse_error_for_blank_uuid_entries() -> None:
+    client = build_client()
+    payload = build_elements_index_apply_payload()
+    payload["elements_md"] = (
+        "# Elements\n\n## Entries\n"
+        "- item | Broken Entry |  | broken alias | malformed identifier\n"
+    )
+
+    response = client.post("/harness/elements-index/apply", json=payload)
+    response_body = response.json()
+
+    assert response.status_code == 500
+    assert response_body["error"] == "parse_error"
+    assert response_body["retryable"] is False
+    assert response_body["details"] == ['Element index entry "Broken Entry" is missing a UUID.']
+
+
 @dataclass
 class FailingHarnessService:
     failure: Exception
@@ -237,6 +294,29 @@ class FailingHarnessService:
 
     def propose_elements_index(self, _request):
         raise AssertionError("Unexpected route call.")
+
+    def apply_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_element_detail(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_event_detail(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+
+@dataclass
+class ElementsIndexFailingHarnessService:
+    failure: Exception
+
+    def propose_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_elements_index(self, _request):
+        raise self.failure
 
     def apply_elements_index(self, _request):
         raise AssertionError("Unexpected route call.")
@@ -267,6 +347,31 @@ def test_shared_error_mapping_covers_retryable_and_non_retryable_failures() -> N
         assert response.status_code == expected_status_code
         assert response_body["error"] == expected_error_code
         assert response_body["retryable"] is expected_retryable
+
+
+def test_elements_index_propose_uses_shared_error_envelope_for_audit_failures() -> None:
+    client = build_client(
+        service_override=ElementsIndexFailingHarnessService(
+            failure=ApiError(
+                "proposal_audit_failed",
+                "The elements proposal failed audit after retry.",
+                500,
+                False,
+                ["Coverage gap: the diff explicitly names Mira, but the proposal omitted her."],
+            )
+        ),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post("/harness/elements-index/propose", json=build_elements_index_propose_payload())
+    response_body = response.json()
+
+    assert response.status_code == 500
+    assert response_body["error"] == "proposal_audit_failed"
+    assert response_body["retryable"] is False
+    assert response_body["details"] == [
+        "Coverage gap: the diff explicitly names Mira, but the proposal omitted her.",
+    ]
 
 
 def test_unexpected_errors_are_logged(caplog) -> None:

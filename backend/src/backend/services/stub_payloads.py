@@ -254,11 +254,11 @@ def resolve_event_uuid(delta: EventDelta) -> str:
 def resolve_element_uuid(decision: ElementDecision) -> str:
     if decision.matched_existing_uuid:
         return decision.matched_existing_uuid
-    return build_uuid("elt", decision.display_name)
+    return build_uuid("elt", decision.kind.value, decision.display_name)
 
 
-def build_uuid(prefix: str, value: str) -> str:
-    digest = sha1(value.encode("utf-8")).hexdigest()[:12]
+def build_uuid(prefix: str, *parts: str) -> str:
+    digest = sha1("::".join(parts).encode("utf-8")).hexdigest()[:12]
     return f"{prefix}_{digest}"
 
 
@@ -313,7 +313,7 @@ Stub mode created this event detail file to validate apply responses.
 
 def build_element_detail_file(element_uuid: str, decision: ElementDecision) -> str:
     aliases = ", ".join(decision.aliases) or decision.display_name
-    identification_keys = "; ".join(decision.identification_keys)
+    identification_keys = "; ".join(decision.identification_keys) or "-"
     return f"""# {decision.display_name}
 
 ## Identification

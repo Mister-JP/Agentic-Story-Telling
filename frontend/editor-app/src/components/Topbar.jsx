@@ -2,6 +2,7 @@ import { ActionIcon, Badge, Text } from '@mantine/core'
 import PropTypes from 'prop-types'
 import editIcon from '../assets/icons/edit-2-svgrepo-com.svg'
 import trashIcon from '../assets/icons/trash-delete-svgrepo-com.svg'
+import { REVIEW_STEPS, REVIEW_STEP_VALUES } from '../utils/reviewSteps.js'
 
 const nodeShape = PropTypes.shape({
   id: PropTypes.string.isRequired,
@@ -39,12 +40,30 @@ function getHeaderCopy(selectionMode, selectedNode, selectedPathNames) {
   }
 }
 
-function getReviewHeaderCopy() {
+function getReviewHeaderCopy(reviewStep) {
+  if (reviewStep === REVIEW_STEPS.ELEMENTS_INDEX) {
+    return {
+      eyebrow: 'Review',
+      breadcrumb: 'World sync',
+      title: 'Elements Index Review',
+      meta: 'Approve or request changes before the element proposal is staged for the world model.',
+    }
+  }
+
+  if (reviewStep === REVIEW_STEPS.EVENTS_INDEX) {
+    return {
+      eyebrow: 'Review',
+      breadcrumb: 'World sync',
+      title: 'Events Index Review',
+      meta: 'Approve or request changes before the event proposal is staged for the world model.',
+    }
+  }
+
   return {
     eyebrow: 'Review',
     breadcrumb: 'World sync',
-    title: 'Events Index Review',
-    meta: 'Approve or request changes before the proposal is applied to the world model.',
+    title: 'World Sync Review',
+    meta: 'Continue the world sync workflow without staging a partial world model update.',
   }
 }
 
@@ -73,6 +92,7 @@ function Topbar({
   onOpenDialog,
   projectAction,
   projectStatus,
+  reviewStep,
   selectedPathNames,
   selectionMode,
   selectedNode,
@@ -81,7 +101,7 @@ function Topbar({
 }) {
   const isReviewMode = viewMode === 'review'
   const headerCopy = isReviewMode
-    ? getReviewHeaderCopy()
+    ? getReviewHeaderCopy(reviewStep)
     : getHeaderCopy(selectionMode, selectedNode, selectedPathNames)
   const statusLabel = isReviewMode
     ? 'Review mode'
@@ -164,6 +184,7 @@ Topbar.propTypes = {
     kind: PropTypes.oneOf(['success', 'error']).isRequired,
     message: PropTypes.string.isRequired,
   }),
+  reviewStep: PropTypes.oneOf(REVIEW_STEP_VALUES),
   selectedPathNames: PropTypes.arrayOf(PropTypes.string).isRequired,
   selectionMode: PropTypes.oneOf(['empty', 'file', 'folder']).isRequired,
   selectedNode: nodeShape.isRequired,

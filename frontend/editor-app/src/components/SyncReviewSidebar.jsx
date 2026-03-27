@@ -1,5 +1,11 @@
 import { Badge, Box, Button, Stack, Stepper, Text } from '@mantine/core'
 import PropTypes from 'prop-types'
+import {
+  REVIEW_STEPS,
+  REVIEW_STEP_VALUES,
+  getIndexReviewStepStatus,
+  getIndexReviewStepperActive,
+} from '../utils/reviewSteps.js'
 
 function buildChangedFilesLabel(changedFiles) {
   const fileCount = changedFiles.length
@@ -11,7 +17,30 @@ function buildSelectedFilesLabel(selectedFileIds) {
   return `${fileCount} selected`
 }
 
+function getStepDescription(status) {
+  if (status === 'active') {
+    return 'Approve or request changes'
+  }
+
+  if (status === 'completed') {
+    return 'Approved and staged'
+  }
+
+  return 'Waiting to begin'
+}
+
+function buildAttemptLabel(reviewSession) {
+  if (reviewSession.attemptNumber > 0) {
+    return `Current attempt: ${reviewSession.attemptNumber}`
+  }
+
+  return 'Waiting for the first proposal'
+}
+
 function SyncReviewSidebar({ onDiscard, reviewSession }) {
+  const eventsStepStatus = getIndexReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
+  const elementsStepStatus = getIndexReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
+
   return (
     <Stack className="review-sidebar" gap="lg" h="100%" justify="space-between">
       <Stack gap="lg">
@@ -19,7 +48,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
           <Text className="eyebrow">Review Mode</Text>
           <Text className="panel-title review-sidebar-title">World Sync</Text>
           <Text className="panel-meta">
-            Stage 1 focuses on event creation and update review before anything is applied.
+            Stage 2 adds element creation and update review while keeping the world model untouched until both steps are approved.
           </Text>
         </Box>
 
@@ -30,22 +59,22 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
           <Text className="review-sidebar-meta">
             {buildSelectedFilesLabel(reviewSession.selectedFileIds)}
           </Text>
-          <Text className="review-sidebar-meta">
-            {reviewSession.attemptNumber > 0
-              ? `Current attempt: ${reviewSession.attemptNumber}`
-              : 'Waiting for the first proposal'}
-          </Text>
+          <Text className="review-sidebar-meta">{buildAttemptLabel(reviewSession)}</Text>
         </Stack>
 
         <Stepper
-          active={0}
+          active={getIndexReviewStepperActive(reviewSession.step)}
           allowNextStepsSelect={false}
           className="review-stepper"
           orientation="vertical"
         >
           <Stepper.Step
-            description="Approve or request changes"
+            description={getStepDescription(eventsStepStatus)}
             label="Events Index"
+          />
+          <Stepper.Step
+            description={getStepDescription(elementsStepStatus)}
+            label="Elements Index"
           />
         </Stepper>
 
@@ -76,6 +105,7 @@ SyncReviewSidebar.propTypes = {
     changedFiles: PropTypes.arrayOf(PropTypes.object).isRequired,
     isLoading: PropTypes.bool.isRequired,
     selectedFileIds: PropTypes.arrayOf(PropTypes.string).isRequired,
+    step: PropTypes.oneOf(REVIEW_STEP_VALUES).isRequired,
   }).isRequired,
 }
 

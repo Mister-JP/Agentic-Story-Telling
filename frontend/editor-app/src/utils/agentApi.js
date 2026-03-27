@@ -115,3 +115,11 @@ export async function proposeEventsIndex(payload) {
 export async function applyEventsIndex(payload) {
   return postJson('/harness/events-index/apply', payload)
 }
+
+export async function proposeElementsIndex(payload) {
+  return postJson('/harness/elements-index/propose', payload)
+}
+
+export async function applyElementsIndex(payload) {
+  return postJson('/harness/elements-index/apply', payload)
+}

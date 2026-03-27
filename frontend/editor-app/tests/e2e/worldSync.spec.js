@@ -2,7 +2,7 @@
 import { expect, test } from '@playwright/test'
 import { clickModeTab } from './support/modeTabs.js'
 
-function buildProposal(summary, reason) {
+function buildEventProposal(summary, reason) {
   return {
     proposal: {
       scan_summary: summary,
@@ -21,7 +21,7 @@ function buildProposal(summary, reason) {
   }
 }
 
-function buildApplyResponse(summary) {
+function buildEventsApplyResponse(summary) {
   return {
     actions: ['Created event evt_stub123.'],
     detail_files: {
@@ -60,6 +60,70 @@ Stub detail created from the approve flow.
   }
 }
 
+function buildElementsProposal(displayName, options = {}) {
+  return {
+    proposal: {
+      diff_summary: options.diffSummary ?? `${displayName} proposal summary`,
+      rationale: options.rationale ?? `${displayName} proposal rationale`,
+      identified_elements: [
+        {
+          display_name: displayName,
+          kind: options.kind ?? 'item',
+          aliases: options.aliases ?? ['cloth bundle'],
+          identification_keys: options.identificationKeys ?? ['altar evidence'],
+          snapshot: options.snapshot ?? `${displayName} matters to the world model.`,
+          update_instruction: options.updateInstruction ?? `Track ${displayName} in detail review.`,
+          evidence_from_diff: options.evidence ?? ['A cloth bundle rested at the altar.'],
+          matched_existing_display_name: options.matchedExistingDisplayName ?? null,
+          matched_existing_uuid: options.matchedExistingUuid ?? null,
+          is_new: options.isNew ?? true,
+        },
+      ],
+      approval_message: options.approvalMessage ?? 'Review the element proposal.',
+    },
+  }
+}
+
+function buildElementsApplyResponse(displayName) {
+  return {
+    actions: [`Created element elt_bundle123: ${displayName} (item).`],
+    detail_files: {
+      elt_bundle123: `# ${displayName}
+
+## Identification
+- UUID: elt_bundle123
+- Type: item
+- Canonical name: ${displayName}
+- Aliases: cloth bundle
+- Identification keys: altar evidence
+
+## Core Understanding
+Stub detail created from the approve flow.
+
+## Stable Profile
+- TBD
+
+## Interpretation
+- TBD
+
+## Knowledge / Beliefs / Uncertainties
+- TBD
+
+## Element-Centered Chronology
+- TBD
+
+## Open Threads
+- TBD
+`,
+    },
+    elements_md: `# Elements
+
+## Entries
+- item | ${displayName} | elt_bundle123 | cloth bundle | altar evidence
+`,
+  }
+}
+
 function buildStructuredError(message) {
   return {
     error: 'stub_backend_error',
@@ -90,7 +154,7 @@ test('shows the loading state and restores sync after discarding a ready review'
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildProposal('Discarded proposal', 'In-flight proposal for discard coverage.')),
+      body: JSON.stringify(buildEventProposal('Discarded proposal', 'In-flight proposal for discard coverage.')),
     })
     resolveProposalFinished()
   })
@@ -137,7 +201,7 @@ test('supports retrying after the initial proposal request fails', async ({ page
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildProposal('Recovered proposal', 'Returned after retrying the request.')),
+      body: JSON.stringify(buildEventProposal('Recovered proposal', 'Returned after retrying the request.')),
     })
   })
 
@@ -155,17 +219,19 @@ test('supports retrying after the initial proposal request fails', async ({ page
   await expect(page.getByTestId('events-index-review').getByText('Recovered proposal').first()).toBeVisible()
 })
 
-test('events index review supports reject and approve in one loop', async ({ page }) => {
-  const proposeRequests = []
-  let proposeCallCount = 0
+test('elements review supports reject with feedback and shows attempt 2 before final approval', async ({ page }) => {
+  const eventProposeRequests = []
+  const elementProposeRequests = []
+  let eventProposeCallCount = 0
+  let elementProposeCallCount = 0
 
   await page.route('**/harness/events-index/propose', async (route) => {
-    proposeCallCount += 1
-    proposeRequests.push(JSON.parse(route.request().postData() ?? '{}'))
+    eventProposeCallCount += 1
+    eventProposeRequests.push(JSON.parse(route.request().postData() ?? '{}'))
 
-    const responseBody = proposeCallCount === 1
-      ? buildProposal('First stub event for review loop', 'Initial deterministic stub response.')
-      : buildProposal('Revised stub event for review loop', 'Updated after reviewer feedback.')
+    const responseBody = eventProposeCallCount === 1
+      ? buildEventProposal('First stub event for review loop', 'Initial deterministic stub response.')
+      : buildEventProposal('Revised stub event for review loop', 'Updated after reviewer feedback.')
 
     await route.fulfill({
       status: 200,
@@ -178,7 +244,33 @@ test('events index review supports reject and approve in one loop', async ({ pag
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildApplyResponse('Revised stub event for review loop')),
+      body: JSON.stringify(buildEventsApplyResponse('Revised stub event for review loop')),
+    })
+  })
+
+  await page.route('**/harness/elements-index/propose', async (route) => {
+    elementProposeCallCount += 1
+    elementProposeRequests.push(JSON.parse(route.request().postData() ?? '{}'))
+
+    const responseBody = elementProposeCallCount === 1
+      ? buildElementsProposal('Cloth Bundle')
+      : buildElementsProposal('Cloth Bundle', {
+        aliases: ['cloth bundle', 'altar bundle'],
+        rationale: 'Revised after reviewer feedback.',
+      })
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(responseBody),
+    })
+  })
+
+  await page.route('**/harness/elements-index/apply', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildElementsApplyResponse('Cloth Bundle')),
     })
   })
 
@@ -200,41 +292,60 @@ test('events index review supports reject and approve in one loop', async ({ pag
     page.getByTestId('events-index-review').getByText('Revised stub event for review loop').first(),
   ).toBeVisible()
 
-  expect(proposeRequests).toHaveLength(2)
-  expect(proposeRequests[0].history).toEqual([])
-  expect(proposeRequests[1].history).toHaveLength(1)
-  expect(proposeRequests[1].history[0].reviewer_feedback).toBe(
+  expect(eventProposeRequests).toHaveLength(2)
+  expect(eventProposeRequests[0].history).toEqual([])
+  expect(eventProposeRequests[1].history).toHaveLength(1)
+  expect(eventProposeRequests[1].history[0].reviewer_feedback).toBe(
     'Tighten the timing and keep the altar discovery explicit.',
   )
-  expect(proposeRequests[1].history[0].previous_output).toContain('First stub event for review loop')
+  expect(eventProposeRequests[1].history[0].previous_output).toContain('First stub event for review loop')
 
   await page.getByTestId('approve-events-index-button').click()
+  await expect(page.getByTestId('elements-index-review')).toBeVisible()
+  await expect(page.getByTestId('review-attempt-indicator')).toContainText('Attempt 1')
 
-  await expect(page.getByTestId('events-index-review')).toHaveCount(0)
+  await page.getByTestId('review-feedback-input').fill('Keep the altar bundle alias explicit.')
+  await page.getByTestId('request-changes-button').click()
+
+  await expect(page.getByTestId('review-attempt-indicator')).toContainText('Attempt 2')
+  await expect(page.getByTestId('elements-index-review').getByText('altar bundle').first()).toBeVisible()
+
+  expect(elementProposeRequests).toHaveLength(2)
+  expect(elementProposeRequests[0].history).toHaveLength(1)
+  expect(elementProposeRequests[0].history[0].reviewer_feedback).toBe(
+    'Tighten the timing and keep the altar discovery explicit.',
+  )
+  expect(elementProposeRequests[1].history).toHaveLength(2)
+  expect(elementProposeRequests[1].history[1].reviewer_feedback).toBe(
+    'Keep the altar bundle alias explicit.',
+  )
+  expect(elementProposeRequests[1].history[1].previous_output).toContain('Cloth Bundle')
+
+  await page.getByTestId('approve-elements-index-button').click()
+
+  await expect(page.getByTestId('elements-index-review')).toHaveCount(0)
   await expect(page.getByTestId('world-sidebar')).toBeVisible()
   await expect(page.getByTestId('project-status-message')).toContainText(
-    'World model updated from the events review.',
+    'World model updated from the review.',
   )
-  await expect(
-    page.getByTestId('world-overview').getByText('Revised stub event for review loop (event)'),
-  ).toBeVisible()
+  await expect(page.getByTestId('world-sidebar').getByText('Cloth Bundle')).toBeVisible()
 })
 
-test('keeps the review open and surfaces a network error when apply fails', async ({ page }) => {
-  let applyCallCount = 0
+test('keeps the events review open and surfaces a network error when events apply fails', async ({ page }) => {
+  let eventsApplyCallCount = 0
 
   await page.route('**/harness/events-index/propose', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildProposal('Apply failure proposal', 'Proposal used to test apply network failure.')),
+      body: JSON.stringify(buildEventProposal('Apply failure proposal', 'Proposal used to test apply network failure.')),
     })
   })
 
   await page.route('**/harness/events-index/apply', async (route) => {
-    applyCallCount += 1
+    eventsApplyCallCount += 1
 
-    if (applyCallCount === 1) {
+    if (eventsApplyCallCount === 1) {
       await route.abort('failed')
       return
     }
@@ -242,7 +353,23 @@ test('keeps the review open and surfaces a network error when apply fails', asyn
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(buildApplyResponse('Apply failure proposal')),
+      body: JSON.stringify(buildEventsApplyResponse('Apply failure proposal')),
+    })
+  })
+
+  await page.route('**/harness/elements-index/propose', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildElementsProposal('Cloth Bundle')),
+    })
+  })
+
+  await page.route('**/harness/elements-index/apply', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildElementsApplyResponse('Cloth Bundle')),
     })
   })
 
@@ -260,9 +387,78 @@ test('keeps the review open and surfaces a network error when apply fails', asyn
 
   await page.getByTestId('approve-events-index-button').click()
 
-  await expect(page.getByTestId('events-index-review')).toHaveCount(0)
+  await expect(page.getByTestId('elements-index-review')).toBeVisible()
+  await page.getByTestId('approve-elements-index-button').click()
+
+  await expect(page.getByTestId('elements-index-review')).toHaveCount(0)
   await expect(page.getByTestId('world-sidebar')).toBeVisible()
   await expect(page.getByTestId('project-status-message')).toContainText(
-    'World model updated from the events review.',
+    'World model updated from the review.',
+  )
+})
+
+test('keeps the elements review open and surfaces a network error when elements apply fails', async ({ page }) => {
+  let elementsApplyCallCount = 0
+
+  await page.route('**/harness/events-index/propose', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildEventProposal('Elements apply failure proposal', 'Proposal used to reach the stage-2 apply flow.')),
+    })
+  })
+
+  await page.route('**/harness/events-index/apply', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildEventsApplyResponse('Elements apply failure proposal')),
+    })
+  })
+
+  await page.route('**/harness/elements-index/propose', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildElementsProposal('Cloth Bundle')),
+    })
+  })
+
+  await page.route('**/harness/elements-index/apply', async (route) => {
+    elementsApplyCallCount += 1
+
+    if (elementsApplyCallCount === 1) {
+      await route.abort('failed')
+      return
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildElementsApplyResponse('Cloth Bundle')),
+    })
+  })
+
+  await openWorldMode(page)
+
+  await page.getByTestId('world-sync-button').click()
+  await expect(page.getByTestId('events-index-review')).toBeVisible()
+
+  await page.getByTestId('approve-events-index-button').click()
+
+  await expect(page.getByTestId('elements-index-review')).toBeVisible()
+  await page.getByTestId('approve-elements-index-button').click()
+
+  await expect(page.getByTestId('review-error-message')).toContainText(
+    'Could not reach the backend. Please try again.',
+  )
+  await expect(page.getByTestId('elements-index-review')).toBeVisible()
+
+  await page.getByTestId('approve-elements-index-button').click()
+
+  await expect(page.getByTestId('elements-index-review')).toHaveCount(0)
+  await expect(page.getByTestId('world-sidebar')).toBeVisible()
+  await expect(page.getByTestId('project-status-message')).toContainText(
+    'World model updated from the review.',
   )
 })

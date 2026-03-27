@@ -98,15 +98,13 @@ describe('App retry flow', () => {
     vi.unstubAllGlobals()
   })
 
-  it('ignores stale proposal responses when retry requests overlap', async () => {
+  it('does not start overlapping retry requests when retry is double-invoked', async () => {
     const user = userEvent.setup()
-    const firstRetryResponse = createDeferred()
-    const secondRetryResponse = createDeferred()
+    const retryResponse = createDeferred()
 
     fetch
       .mockRejectedValueOnce(new Error('offline'))
-      .mockImplementationOnce(() => firstRetryResponse.promise)
-      .mockImplementationOnce(() => secondRetryResponse.promise)
+      .mockImplementationOnce(() => retryResponse.promise)
 
     renderApp()
 
@@ -125,32 +123,19 @@ describe('App retry flow', () => {
     })
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledTimes(3)
+      expect(fetch).toHaveBeenCalledTimes(2)
     })
 
-    secondRetryResponse.resolve({
+    retryResponse.resolve({
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValue({
-        proposal: buildProposal('Second retry wins'),
+        proposal: buildProposal('Single retry wins'),
       }),
     })
 
     await waitFor(() => {
-      expect(screen.getByTestId('review-panel-stub')).toHaveTextContent('Second retry wins')
+      expect(screen.getByTestId('review-panel-stub')).toHaveTextContent('Single retry wins')
     })
-
-    firstRetryResponse.resolve({
-      ok: true,
-      status: 200,
-      json: vi.fn().mockResolvedValue({
-        proposal: buildProposal('First retry resolves late'),
-      }),
-    })
-
-    await waitFor(() => {
-      expect(screen.getByTestId('review-panel-stub')).toHaveTextContent('Second retry wins')
-    })
-    expect(screen.getByTestId('review-panel-stub')).not.toHaveTextContent('First retry resolves late')
   })
 })

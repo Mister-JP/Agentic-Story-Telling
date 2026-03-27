@@ -4,6 +4,7 @@ import { createContentSnapshot } from '../../src/utils/diffEngine.js'
 import {
   buildWorldSyncDraft,
   canStartWorldSync,
+  getElementsIndexMarkdown,
   getEventsIndexMarkdown,
   getWorldSyncButtonState,
 } from '../../src/utils/worldSync.js'
@@ -32,9 +33,36 @@ describe('worldSync helpers', () => {
       null,
     )
 
+    expect(draft.elementsMd).toBe('')
     expect(draft.eventsMd).toBe('')
     expect(draft.diffText).toContain('+++ b/story-structure/chapter-07.story')
     expect(draft.diffText).toContain('+++ b/notes.story')
+  })
+
+  it('keeps never-synced gating aligned with draft generation for empty content', () => {
+    const emptyWorkspace = {
+      id: 'workspace-root',
+      name: 'workspace',
+      type: 'folder',
+      children: [
+        {
+          id: 'empty-file',
+          name: 'empty.story',
+          type: 'file',
+          content: '<p></p>',
+        },
+      ],
+    }
+    const neverSyncedState = {
+      status: 'never_synced',
+      lastSyncedAt: null,
+      lastSyncedSnapshot: {},
+    }
+    const draft = buildWorldSyncDraft(emptyWorkspace, neverSyncedState, null)
+
+    expect(canStartWorldSync(emptyWorkspace, neverSyncedState)).toBe(false)
+    expect(draft.changedFiles).toEqual([])
+    expect(draft.diffText).toBe('')
   })
 
   it('builds a world sync draft from an existing world model', () => {
@@ -46,9 +74,18 @@ describe('worldSync helpers', () => {
     }
     const draft = buildWorldSyncDraft(WORKSPACE_TWO_FILES_MODIFIED, syncState, worldModel)
 
+    expect(draft.elementsMd).toContain('# Elements')
+    expect(draft.elementsMd).toContain('elt_45d617e4531b')
     expect(draft.eventsMd).toContain('# Events')
     expect(draft.eventsMd).toContain('evt_f72bc8fe0f29')
     expect(draft.diffText).toContain('Saint Alder Chapel')
+  })
+
+  it('renders existing elements markdown when a world model is present', () => {
+    const elementsMarkdown = getElementsIndexMarkdown(buildWorldModelFixture())
+
+    expect(elementsMarkdown).toContain('# Elements')
+    expect(elementsMarkdown).toContain('elt_45d617e4531b')
   })
 
   it('renders existing events markdown when a world model is present', () => {
