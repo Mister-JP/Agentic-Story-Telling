@@ -17,6 +17,7 @@ import {
 } from './utils/agentApi.js'
 import {
   applyCompletedSyncReviewResult,
+  beginIndexReviewSession,
   buildCurrentDetailMarkdown,
   buildElementDetailTargets,
   buildEventDetailTargets,
@@ -27,6 +28,7 @@ import {
   createReviewIterationState,
   getCurrentDetailTarget,
   getReviewAttemptNumber,
+  updateDiffPreviewSelection,
 } from './utils/syncReview.js'
 import { REVIEW_STEPS, isDetailReviewStep, isIndexReviewStep } from './utils/reviewSteps.js'
 import { getSyncBadgeProps } from './utils/syncSelectors.js'
@@ -635,7 +637,7 @@ function App() {
     }
   }, [applyProposalResponseToSession, releaseReviewAction, requestReviewProposalForSession, tryLockReviewAction])
 
-  const handleStartWorldSync = useCallback(async () => {
+  const handleStartWorldSync = useCallback(() => {
     const actionName = 'start-world-sync'
 
     if (isWorldSyncLoading) {
@@ -656,12 +658,48 @@ function App() {
 
     setProjectStatus(null)
     setIsWorldSyncLoading(true)
+    reviewGenerationRef.current += 1
+    setReviewSession(createIndexReviewSession(workspace, syncState, worldModel))
+    setViewMode('review')
+    setIsWorldSyncLoading(false)
+    releaseReviewAction(actionName)
+  }, [
+    isWorldSyncLoading,
+    releaseReviewAction,
+    syncState,
+    tryLockReviewAction,
+    worldModel,
+    workspace,
+    worldSyncButtonState.disabled,
+  ])
+
+  const handleReviewSelectionChange = useCallback((nextSelectedFileIds) => {
+    setReviewSession((current) => {
+      if (!current || current.step !== REVIEW_STEPS.DIFF_PREVIEW) {
+        return current
+      }
+
+      return updateDiffPreviewSelection(current, nextSelectedFileIds)
+    })
+  }, [])
+
+  const handleContinueWorldSync = useCallback(async () => {
+    const activeReviewSession = reviewSessionRef.current
+    const actionName = 'continue-world-sync'
+
+    if (
+      !activeReviewSession
+      || activeReviewSession.step !== REVIEW_STEPS.DIFF_PREVIEW
+      || activeReviewSession.selectedFileIds.length === 0
+      || !tryLockReviewAction(actionName)
+    ) {
+      return
+    }
 
     const reviewGeneration = reviewGenerationRef.current + 1
     reviewGenerationRef.current = reviewGeneration
-    const nextReviewSession = createIndexReviewSession(workspace, syncState, worldModel)
+    const nextReviewSession = beginIndexReviewSession(activeReviewSession)
     setReviewSession(nextReviewSession)
-    setViewMode('review')
 
     try {
       const response = await requestReviewProposalForSession(nextReviewSession, [])
@@ -689,21 +727,13 @@ function App() {
         }
       })
     } finally {
-      if (reviewGenerationRef.current === reviewGeneration) {
-        setIsWorldSyncLoading(false)
-      }
       releaseReviewAction(actionName)
     }
   }, [
     applyProposalResponseToSession,
-    isWorldSyncLoading,
     releaseReviewAction,
     requestReviewProposalForSession,
-    syncState,
     tryLockReviewAction,
-    worldModel,
-    workspace,
-    worldSyncButtonState.disabled,
   ])
 
   const handleRequestReviewChanges = useCallback(async (reviewerFeedback) => {
@@ -1253,7 +1283,9 @@ function App() {
           {viewMode === 'review' ? (
             <SyncReviewPanel
               onApprove={handleApproveReview}
+              onContinue={handleContinueWorldSync}
               onRequestChanges={handleRequestReviewChanges}
+              onSelectionChange={handleReviewSelectionChange}
               onRetry={handleRetryReview}
               onSkip={handleSkipDetailReview}
               reviewSession={reviewSession}

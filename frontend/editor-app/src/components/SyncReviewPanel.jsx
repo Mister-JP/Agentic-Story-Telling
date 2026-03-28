@@ -1,6 +1,7 @@
 import { Box, Button, Loader, Stack, Text } from '@mantine/core'
 import PropTypes from 'prop-types'
 import DetailReviewStep from './DetailReviewStep.jsx'
+import DiffPreviewStep from './DiffPreviewStep.jsx'
 import IndexReviewStep from './IndexReviewStep.jsx'
 import {
   DETAIL_REVIEW_STEP_VALUES,
@@ -83,13 +84,26 @@ ReviewErrorState.propTypes = {
 
 function SyncReviewPanel({
   onApprove,
+  onContinue,
   onRequestChanges,
+  onSelectionChange,
   onRetry,
   onSkip,
   reviewSession,
 }) {
   if (!reviewSession) {
     return null
+  }
+
+  if (reviewSession.step === REVIEW_STEPS.DIFF_PREVIEW) {
+    return (
+      <DiffPreviewStep
+        changedFiles={reviewSession.changedFiles}
+        onContinue={onContinue}
+        onSelectionChange={onSelectionChange}
+        selectedFileIds={reviewSession.selectedFileIds}
+      />
+    )
   }
 
   if (!reviewSession.currentProposal) {
@@ -144,11 +158,14 @@ function SyncReviewPanel({
 
 SyncReviewPanel.propTypes = {
   onApprove: PropTypes.func.isRequired,
+  onContinue: PropTypes.func.isRequired,
   onRequestChanges: PropTypes.func.isRequired,
+  onSelectionChange: PropTypes.func.isRequired,
   onRetry: PropTypes.func.isRequired,
   onSkip: PropTypes.func.isRequired,
   reviewSession: PropTypes.shape({
     attemptNumber: PropTypes.number,
+    changedFiles: PropTypes.array,
     currentDetailIndex: PropTypes.number,
     currentPreviewDiff: PropTypes.string,
     currentProposal: PropTypes.object,
@@ -156,6 +173,7 @@ SyncReviewPanel.propTypes = {
     error: PropTypes.string,
     isLoading: PropTypes.bool,
     loadingAction: PropTypes.oneOf(['approve', 'proposal', 'request-changes', 'skip']),
+    selectedFileIds: PropTypes.array,
     step: PropTypes.oneOf(REVIEW_STEP_VALUES),
   }),
 }

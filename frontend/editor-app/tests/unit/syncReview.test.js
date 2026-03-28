@@ -5,6 +5,7 @@ import { buildWorldModelFixture } from '../fixtures/worldModel.js'
 import {
   applyCompletedSyncReviewResult,
   applyStagedIndexReviewResult,
+  beginIndexReviewSession,
   buildElementDetailTargets,
   buildEventDetailTargets,
   countCompletedDetailTargets,
@@ -13,11 +14,12 @@ import {
   createIndexReviewSession,
   createReviewHistoryEntry,
   getReviewAttemptNumber,
+  updateDiffPreviewSelection,
 } from '../../src/utils/syncReview.js'
 import { getElementsIndexMarkdown, getEventsIndexMarkdown } from '../../src/utils/worldSync.js'
 
 describe('syncReview helpers', () => {
-  it('builds an events review session from the current workspace diff', () => {
+  it('builds a diff preview review session from the current workspace diff', () => {
     const reviewSession = createIndexReviewSession(
       WORKSPACE_TWO_FILES,
       {
@@ -28,15 +30,55 @@ describe('syncReview helpers', () => {
       null,
     )
 
-    expect(reviewSession.step).toBe('events-index')
-    expect(reviewSession.attemptNumber).toBe(1)
+    expect(reviewSession.step).toBe('diff-preview')
+    expect(reviewSession.attemptNumber).toBe(0)
+    expect(reviewSession.isLoading).toBe(false)
     expect(reviewSession.changedFiles).toHaveLength(3)
     expect(reviewSession.elementsMd).toBe('')
     expect(reviewSession.selectedFileIds).toHaveLength(3)
     expect(reviewSession.selectedFileIds).toEqual(
       expect.arrayContaining(['chapter-07', 'chapter-08', 'notes-file']),
     )
+    expect(reviewSession.changedFiles[0]).toHaveProperty('diffText')
     expect(reviewSession.diffText).toContain('+++ b/story-structure/chapter-07.story')
+  })
+
+  it('recomputes diffText when diff preview selection changes', () => {
+    const reviewSession = createIndexReviewSession(
+      WORKSPACE_TWO_FILES,
+      {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      null,
+    )
+
+    const nextSession = updateDiffPreviewSelection(reviewSession, ['chapter-07', 'notes-file'])
+
+    expect(nextSession.selectedFileIds).toEqual(['chapter-07', 'notes-file'])
+    expect(nextSession.diffText).toContain('story-structure/chapter-07.story')
+    expect(nextSession.diffText).toContain('notes.story')
+    expect(nextSession.diffText).not.toContain('story-structure/chapter-08.story')
+  })
+
+  it('moves from diff preview into the first events review request state', () => {
+    const reviewSession = createIndexReviewSession(
+      WORKSPACE_TWO_FILES,
+      {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      null,
+    )
+
+    const nextSession = beginIndexReviewSession(reviewSession)
+
+    expect(nextSession.step).toBe('events-index')
+    expect(nextSession.attemptNumber).toBe(1)
+    expect(nextSession.isLoading).toBe(true)
+    expect(nextSession.loadingAction).toBe('proposal')
   })
 
   it('serializes the rejected proposal into a history entry', () => {

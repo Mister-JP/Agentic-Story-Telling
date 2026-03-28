@@ -57,6 +57,7 @@ describe('SyncReviewSidebar', () => {
       step: 'elements-index',
     })
 
+    expect(screen.getByText('Selection confirmed')).toBeInTheDocument()
     expect(screen.getByText('Elements Index')).toBeInTheDocument()
     expect(screen.getByText('Approved and staged')).toBeInTheDocument()
   })
@@ -90,7 +91,7 @@ describe('SyncReviewSidebar', () => {
     expect(screen.getByText('Event Details (0/1)')).toBeInTheDocument()
   })
 
-  it('keeps both index steps pending during diff preview', () => {
+  it('shows Select Changes as active while the review is in diff preview', () => {
     renderSidebar({
       attemptNumber: 0,
       changedFiles: [{ fileId: 'chapter-08' }],
@@ -99,6 +100,8 @@ describe('SyncReviewSidebar', () => {
       step: 'diff-preview',
     })
 
+    expect(screen.getByText('Select Changes')).toBeInTheDocument()
+    expect(screen.getByText('Choose files to include')).toBeInTheDocument()
     expect(screen.getAllByText('Waiting to begin')).toHaveLength(4)
     expect(screen.queryByText('Approve or request changes')).not.toBeInTheDocument()
     expect(screen.queryByText('Approved and staged')).not.toBeInTheDocument()

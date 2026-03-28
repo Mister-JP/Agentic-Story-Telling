@@ -1,6 +1,7 @@
 import { Box, Button, Group, Stack, Text, Textarea } from '@mantine/core'
 import PropTypes from 'prop-types'
 import { useEffect, useState } from 'react'
+import ReviewDiffViewer from './ReviewDiffViewer.jsx'
 import { DETAIL_REVIEW_STEP_VALUES, REVIEW_STEPS } from '../utils/reviewSteps.js'
 
 function getStageCopy(step) {
@@ -19,44 +20,6 @@ function getStageCopy(step) {
     title: 'Element Detail Review',
     targetLabel: 'Element Detail',
   }
-}
-
-function getDiffLineClassName(line) {
-  if (line.startsWith('+++') || line.startsWith('---')) {
-    return 'review-diff-line review-diff-line--header'
-  }
-
-  if (line.startsWith('+')) {
-    return 'review-diff-line review-diff-line--added'
-  }
-
-  if (line.startsWith('-')) {
-    return 'review-diff-line review-diff-line--removed'
-  }
-
-  if (line.startsWith('@@')) {
-    return 'review-diff-line review-diff-line--hunk'
-  }
-
-  return 'review-diff-line review-diff-line--context'
-}
-
-function DiffViewer({ previewDiff }) {
-  const diffLines = previewDiff.split('\n')
-
-  return (
-    <Box className="review-diff-viewer" data-testid="detail-diff-viewer">
-      {diffLines.map((line, index) => (
-        <Text className={getDiffLineClassName(line)} component="pre" key={`${line}-${index}`}>
-          {line || ' '}
-        </Text>
-      ))}
-    </Box>
-  )
-}
-
-DiffViewer.propTypes = {
-  previewDiff: PropTypes.string.isRequired,
 }
 
 function DetailReviewStep({
@@ -142,7 +105,7 @@ function DetailReviewStep({
       <Box className="review-delta-card" mt="xl">
         <Text className="review-delta-label">Proposed Diff</Text>
         {hasChanges ? (
-          <DiffViewer previewDiff={previewDiff} />
+          <ReviewDiffViewer previewDiff={previewDiff} testId="detail-diff-viewer" />
         ) : hasEmptyChangedDiff ? (
           <Stack className="review-empty-diff" gap={8} mt="md">
             <Text className="review-empty-title" data-testid="detail-empty-diff-warning-title">

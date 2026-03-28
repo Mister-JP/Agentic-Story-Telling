@@ -109,6 +109,14 @@ describe('App retry flow', () => {
     renderApp()
 
     await user.click(screen.getByTestId('sidebar-start-sync'))
+    await waitFor(() => {
+      expect(latestReviewPanelProps?.reviewSession?.step).toBe('diff-preview')
+    })
+
+    await act(async () => {
+      void latestReviewPanelProps.onContinue()
+      await Promise.resolve()
+    })
 
     await waitFor(() => {
       expect(latestReviewPanelProps?.reviewSession?.error).toBe(

@@ -2,7 +2,7 @@ import { createContentSnapshot, updateSnapshotAfterSync } from './diffEngine.js'
 import { DEFAULT_ELEMENTS_INDEX_PREAMBLE, ELEMENT_FIELD_NAMES } from './elementsIndexFields.js'
 import { DEFAULT_EVENTS_INDEX_PREAMBLE, EVENT_FIELD_NAMES } from './eventsIndexFields.js'
 import { REVIEW_STEPS } from './reviewSteps.js'
-import { buildWorldSyncDraft } from './worldSync.js'
+import { buildWorldSyncDraft, rebuildWorldSyncDiff } from './worldSync.js'
 import { createEmptyWorldModel, parseIndexMarkdown } from './worldModel.js'
 
 function buildInitialReviewState(overrides = {}) {
@@ -225,13 +225,19 @@ export function createIndexReviewSession(workspace, syncState, worldModel) {
   const worldSyncDraft = buildWorldSyncDraft(workspace, syncState, worldModel)
 
   return {
-    ...buildInitialReviewState(),
+    ...buildInitialReviewState({
+      attemptNumber: 0,
+      isLoading: false,
+      loadingAction: null,
+    }),
     changedFiles: worldSyncDraft.changedFiles,
+    currentSnapshot: worldSyncDraft.currentSnapshot,
     diffText: worldSyncDraft.diffText,
     elementsMd: worldSyncDraft.elementsMd,
     eventsMd: worldSyncDraft.eventsMd,
+    lastSyncedSnapshot: worldSyncDraft.lastSyncedSnapshot,
     selectedFileIds: worldSyncDraft.selectedFileIds,
-    step: REVIEW_STEPS.EVENTS_INDEX,
+    step: REVIEW_STEPS.DIFF_PREVIEW,
     detailResults: {},
     detailTargets: [],
     currentDetailIndex: 0,
@@ -239,6 +245,40 @@ export function createIndexReviewSession(workspace, syncState, worldModel) {
     eventDetailTargets: [],
     updatedElementsState: null,
     updatedEventsState: null,
+  }
+}
+
+export function updateDiffPreviewSelection(reviewSession, nextSelectedFileIds) {
+  if (!reviewSession) {
+    return reviewSession
+  }
+
+  const { diffText, selectedFileIds } = rebuildWorldSyncDiff(
+    reviewSession.changedFiles ?? [],
+    nextSelectedFileIds,
+    reviewSession.currentSnapshot,
+    reviewSession.lastSyncedSnapshot,
+  )
+
+  return {
+    ...reviewSession,
+    diffText,
+    selectedFileIds,
+  }
+}
+
+export function beginIndexReviewSession(reviewSession) {
+  if (!reviewSession) {
+    return reviewSession
+  }
+
+  return {
+    ...reviewSession,
+    attemptNumber: 1,
+    error: null,
+    isLoading: true,
+    loadingAction: 'proposal',
+    step: REVIEW_STEPS.EVENTS_INDEX,
   }
 }
 

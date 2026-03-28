@@ -394,17 +394,27 @@ describe('updateSnapshotAfterSync', () => {
     expect(result['chapter-07'].markdown).not.toContain('Saint Alder');
   });
 
-  it('removes entries for files that no longer exist in the workspace', () => {
+  it('removes selected entries for files that no longer exist in the workspace', () => {
     const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
     const withDeletedFile = createContentSnapshot(WORKSPACE_WITH_ADDED_AND_DELETED);
 
-    const result = updateSnapshotAfterSync(baseline, withDeletedFile, ['chapter-07']);
+    const result = updateSnapshotAfterSync(baseline, withDeletedFile, ['chapter-08']);
 
     // chapter-08 was in the baseline but deleted from the workspace
     expect(result).not.toHaveProperty('chapter-08');
 
     // chapter-09 was added but not selected — should NOT appear
     expect(result).not.toHaveProperty('chapter-09');
+  });
+
+  it('retains unselected deleted entries so they appear again next sync', () => {
+    const baseline = createContentSnapshot(WORKSPACE_TWO_FILES);
+    const withDeletedFile = createContentSnapshot(WORKSPACE_WITH_ADDED_AND_DELETED);
+
+    const result = updateSnapshotAfterSync(baseline, withDeletedFile, ['chapter-07']);
+
+    expect(result).toHaveProperty('chapter-08');
+    expect(result['chapter-08'].markdown).toContain('Morning light');
   });
 
   it('adds selected new files to the snapshot', () => {

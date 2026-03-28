@@ -152,6 +152,50 @@ async function openWorldMode(page) {
   await expect(page.getByTestId('world-sync-button')).toBeVisible()
 }
 
+async function startSyncToDiffPreview(page) {
+  await page.getByTestId('world-sync-button').click()
+  await expect(page.getByTestId('diff-preview-review')).toBeVisible()
+}
+
+async function continueFromDiffPreview(page) {
+  await page.getByTestId('continue-diff-preview-button').click()
+}
+
+async function startSyncToEventsIndex(page) {
+  await startSyncToDiffPreview(page)
+  await continueFromDiffPreview(page)
+  await expect(page.getByTestId('events-index-review')).toBeVisible()
+}
+
+test('renders diff preview before the first request and filters the initial diff by selected files', async ({ page }) => {
+  const eventProposeRequests = []
+
+  await page.route('**/harness/events-index/propose', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}')
+    eventProposeRequests.push(body)
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildEventProposal('Stub event')),
+    })
+  })
+
+  await openWorldMode(page)
+  await startSyncToDiffPreview(page)
+
+  await expect(page.getByTestId('diff-preview-file-checkbox-opening-scene')).toBeChecked()
+  expect(eventProposeRequests).toHaveLength(0)
+
+  await page.getByTestId('diff-preview-file-checkbox-opening-scene').click()
+  await continueFromDiffPreview(page)
+
+  await expect(page.getByTestId('events-index-review')).toBeVisible()
+  expect(eventProposeRequests).toHaveLength(1)
+  expect(eventProposeRequests[0].diff_text).toContain('story-structure/character-arc.story')
+  expect(eventProposeRequests[0].diff_text).not.toContain('story-structure/opening-scene.story')
+})
+
 test('runs the detail review loop with approve, skip, and reject-then-approve before committing', async ({ page }) => {
   const eventProposeRequests = []
   const detailEventRequests = []
@@ -238,9 +282,7 @@ test('runs the detail review loop with approve, skip, and reject-then-approve be
   })
 
   await openWorldMode(page)
-  await page.getByTestId('world-sync-button').click()
-
-  await expect(page.getByTestId('events-index-review')).toBeVisible()
+  await startSyncToEventsIndex(page)
   await page.getByTestId('review-feedback-input').fill('Tighten the chronology language.')
   await page.getByTestId('request-changes-button').click()
 
@@ -369,7 +411,7 @@ test('shows a no-change message for changed=false detail responses', async ({ pa
   })
 
   await openWorldMode(page)
-  await page.getByTestId('world-sync-button').click()
+  await startSyncToEventsIndex(page)
   await page.getByTestId('approve-events-index-button').click()
   await page.getByTestId('approve-elements-index-button').click()
 
@@ -424,7 +466,7 @@ test('canceling during detail review requires confirmation and leaves the world 
   })
 
   await openWorldMode(page)
-  await page.getByTestId('world-sync-button').click()
+  await startSyncToEventsIndex(page)
   await page.getByTestId('approve-events-index-button').click()
   await page.getByTestId('approve-elements-index-button').click()
 

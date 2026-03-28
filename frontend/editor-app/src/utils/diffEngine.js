@@ -161,6 +161,34 @@ export function computeFileDiff(oldContent, newContent, filePath) {
   );
 }
 
+export function buildChangedFileDiff(changedFile, currentSnapshot, lastSyncedSnapshot) {
+  if (!changedFile?.fileId) {
+    return '';
+  }
+
+  const current = currentSnapshot ?? {};
+  const previous = lastSyncedSnapshot ?? {};
+  const filePath = current[changedFile.fileId]?.path
+    ?? previous[changedFile.fileId]?.path
+    ?? changedFile.filePath
+    ?? changedFile.fileId;
+  const oldContent = previous[changedFile.fileId]?.markdown ?? '';
+  const newContent = current[changedFile.fileId]?.markdown ?? '';
+
+  return computeFileDiff(oldContent, newContent, filePath);
+}
+
+export function attachDiffTextToChangedFiles(changedFiles, currentSnapshot, lastSyncedSnapshot) {
+  if (!Array.isArray(changedFiles)) {
+    return [];
+  }
+
+  return changedFiles.map((changedFile) => ({
+    ...changedFile,
+    diffText: buildChangedFileDiff(changedFile, currentSnapshot, lastSyncedSnapshot),
+  }));
+}
+
 // ── Combined diff assembly ───────────────────────────────────────────────
 
 /**
@@ -184,8 +212,6 @@ export function assembleCombinedDiff(
   }
 
   const selectedSet = new Set(selectedFileIds);
-  const current = currentSnapshot ?? {};
-  const previous = lastSyncedSnapshot ?? {};
   const diffParts = [];
 
   for (const changedFile of changedFiles) {
@@ -193,14 +219,7 @@ export function assembleCombinedDiff(
       continue;
     }
 
-    const filePath = current[changedFile.fileId]?.path
-      ?? previous[changedFile.fileId]?.path
-      ?? changedFile.fileId;
-
-    const oldContent = previous[changedFile.fileId]?.markdown ?? '';
-    const newContent = current[changedFile.fileId]?.markdown ?? '';
-
-    diffParts.push(computeFileDiff(oldContent, newContent, filePath));
+    diffParts.push(buildChangedFileDiff(changedFile, currentSnapshot, lastSyncedSnapshot));
   }
 
   return diffParts.join('\n');
@@ -212,9 +231,9 @@ export function assembleCombinedDiff(
  * Build an updated snapshot after a partial sync completes.
  *
  * Only files included in `selectedFileIds` are refreshed from the current
- * snapshot. Files that no longer exist in `currentSnapshot` (deleted files)
- * are removed. Unselected files retain their previous snapshot values so
- * they continue to appear as "changed" in the next sync.
+ * snapshot. Deleted files are removed only when their IDs were selected for
+ * sync. Unselected files retain their previous snapshot values so they
+ * continue to appear as "changed" in the next sync.
  *
  * @param {Record<string, object>} previousSnapshot   Snapshot from syncState.lastSyncedSnapshot.
  * @param {Record<string, object>} currentSnapshot    Snapshot of current workspace (from createContentSnapshot).
@@ -240,8 +259,8 @@ export function updateSnapshotAfterSync(
     }
   }
 
-  // Remove entries for files that no longer exist in the workspace
-  for (const fileId of Object.keys(updatedSnapshot)) {
+  // Remove selected entries for files that no longer exist in the workspace.
+  for (const fileId of selectedSet) {
     if (!(fileId in safeCurrent)) {
       delete updatedSnapshot[fileId];
     }

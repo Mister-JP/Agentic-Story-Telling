@@ -3,15 +3,18 @@ import { MantineProvider } from '@mantine/core'
 import { describe, expect, it, vi } from 'vitest'
 import SyncReviewPanel from '../../src/components/SyncReviewPanel.jsx'
 
-function renderPanel(reviewSession) {
+function renderPanel(reviewSession, handlers = {}) {
   return render(
     <MantineProvider>
       <SyncReviewPanel
         onApprove={vi.fn()}
+        onContinue={vi.fn()}
         onRequestChanges={vi.fn()}
+        onSelectionChange={vi.fn()}
         onRetry={vi.fn()}
         onSkip={vi.fn()}
         reviewSession={reviewSession}
+        {...handlers}
       />
     </MantineProvider>,
   )
@@ -38,6 +41,54 @@ describe('SyncReviewPanel', () => {
     expect(screen.queryByTestId('review-loading-state')).not.toBeInTheDocument()
     expect(screen.queryByTestId('review-error-state')).not.toBeInTheDocument()
     expect(screen.queryByTestId('events-index-review')).not.toBeInTheDocument()
+  })
+
+  it('renders the diff preview step before the first proposal request', () => {
+    renderPanel({
+      attemptNumber: 0,
+      changedFiles: [
+        {
+          diffText: '--- a/story-structure/chapter-07.story\n+++ b/story-structure/chapter-07.story',
+          fileId: 'chapter-07',
+          fileName: 'chapter-07.story',
+          filePath: 'story-structure/chapter-07.story',
+          status: 'modified',
+        },
+      ],
+      currentProposal: null,
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      selectedFileIds: ['chapter-07'],
+      step: 'diff-preview',
+    })
+
+    expect(screen.getByTestId('diff-preview-review')).toBeInTheDocument()
+    expect(screen.getByTestId('continue-diff-preview-button')).toBeEnabled()
+    expect(screen.getByTestId('diff-preview-file-checkbox-chapter-07')).toBeChecked()
+  })
+
+  it('disables continue when no diff-preview files are selected', () => {
+    renderPanel({
+      attemptNumber: 0,
+      changedFiles: [
+        {
+          diffText: '--- a/story-structure/chapter-07.story\n+++ b/story-structure/chapter-07.story',
+          fileId: 'chapter-07',
+          fileName: 'chapter-07.story',
+          filePath: 'story-structure/chapter-07.story',
+          status: 'modified',
+        },
+      ],
+      currentProposal: null,
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      selectedFileIds: [],
+      step: 'diff-preview',
+    })
+
+    expect(screen.getByTestId('continue-diff-preview-button')).toBeDisabled()
   })
 
   it('renders the event review summary from scan_summary', () => {
@@ -226,7 +277,7 @@ describe('SyncReviewPanel', () => {
     expect(screen.queryByTestId('detail-no-change-message')).not.toBeInTheDocument()
   })
 
-  it.each(['diff-preview', 'complete'])(
+  it.each(['complete'])(
     'renders nothing for non-review-panel step %s',
     (step) => {
       renderPanel({

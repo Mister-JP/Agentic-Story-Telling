@@ -238,6 +238,21 @@ function createDeferred() {
   return { promise, reject, resolve }
 }
 
+async function startSyncToDiffPreview(user) {
+  await user.click(screen.getByTestId('sidebar-start-sync'))
+  await screen.findByTestId('diff-preview-review')
+}
+
+async function continueFromDiffPreview(user) {
+  await user.click(screen.getByTestId('continue-diff-preview-button'))
+}
+
+async function startSyncToEventsIndex(user) {
+  await startSyncToDiffPreview(user)
+  await continueFromDiffPreview(user)
+  await screen.findByTestId('events-index-review')
+}
+
 describe('App review flow', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
@@ -327,8 +342,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
 
     await user.type(screen.getByTestId('review-feedback-input'), 'Tighten the chronology language.')
     await user.click(screen.getByTestId('request-changes-button'))
@@ -399,6 +413,28 @@ describe('App review flow', () => {
     expect(screen.getByTestId('event-detail-evt_stub123')).toHaveTextContent('Approved event detail after feedback.')
   })
 
+  it('waits for diff preview selection before sending the first proposal request', async () => {
+    const user = userEvent.setup()
+
+    fetch.mockResolvedValueOnce(jsonResponse({
+      proposal: buildEventProposal('Stub event'),
+    }))
+
+    renderApp()
+
+    await startSyncToDiffPreview(user)
+    expect(fetch).not.toHaveBeenCalled()
+
+    await user.click(screen.getByTestId('diff-preview-file-checkbox-opening-scene'))
+    await continueFromDiffPreview(user)
+    await screen.findByTestId('events-index-review')
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const firstRequest = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(firstRequest.diff_text).toContain('story-structure/character-arc.story')
+    expect(firstRequest.diff_text).not.toContain('story-structure/opening-scene.story')
+  })
+
   it('shows the no-change message during detail review when the backend returns changed=false', async () => {
     const user = userEvent.setup()
 
@@ -467,8 +503,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))
@@ -519,8 +554,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))
@@ -551,7 +585,8 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
+    await startSyncToDiffPreview(user)
+    await continueFromDiffPreview(user)
     await screen.findByTestId('review-error-state')
     expect(screen.getByText('Could not reach the backend. Please try again.')).toBeInTheDocument()
 
@@ -572,8 +607,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
 
     await waitFor(() => {
@@ -598,8 +632,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))
@@ -626,8 +659,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.dblClick(screen.getByTestId('approve-events-index-button'))
 
     await waitFor(() => {
@@ -652,8 +684,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.type(screen.getByTestId('review-feedback-input'), 'Tighten the chronology language.')
     await user.dblClick(screen.getByTestId('request-changes-button'))
 
@@ -684,8 +715,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.type(screen.getByTestId('review-feedback-input'), 'First correction.')
     await user.click(screen.getByTestId('request-changes-button'))
 
@@ -718,8 +748,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
 
     await user.click(screen.getByTestId('discard-review-button'))
     expect(await screen.findByText('Cancel the current world sync?')).toBeInTheDocument()
@@ -749,8 +778,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))
@@ -782,8 +810,7 @@ describe('App review flow', () => {
 
     renderApp()
 
-    await user.click(screen.getByTestId('sidebar-start-sync'))
-    await screen.findByTestId('events-index-review')
+    await startSyncToEventsIndex(user)
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))

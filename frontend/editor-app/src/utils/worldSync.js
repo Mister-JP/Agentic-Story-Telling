@@ -1,4 +1,5 @@
 import {
+  attachDiffTextToChangedFiles,
   assembleCombinedDiff,
   createContentSnapshot,
   getChangedFiles,
@@ -25,6 +26,12 @@ function getChangedFilesForSnapshot(
 
 function getSelectedFileIdentifiers(changedFiles) {
   return changedFiles.map((changedFile) => changedFile.fileId)
+}
+
+function normalizeSelectedFileIdentifiers(changedFiles, selectedFileIds) {
+  const selectedSet = new Set(selectedFileIds ?? [])
+
+  return getSelectedFileIdentifiers(changedFiles).filter((fileId) => selectedSet.has(fileId))
 }
 
 function getLastSyncedSnapshot(syncState) {
@@ -75,7 +82,11 @@ export function canStartWorldSync(workspace, syncState) {
 export function buildWorldSyncDraft(workspace, syncState, worldModel) {
   const currentSnapshot = createContentSnapshot(workspace)
   const lastSyncedSnapshot = getLastSyncedSnapshot(syncState)
-  const changedFiles = getChangedFilesForSnapshot(currentSnapshot, syncState, lastSyncedSnapshot)
+  const changedFiles = attachDiffTextToChangedFiles(
+    getChangedFilesForSnapshot(currentSnapshot, syncState, lastSyncedSnapshot),
+    currentSnapshot,
+    lastSyncedSnapshot,
+  )
   const selectedFileIds = getSelectedFileIdentifiers(changedFiles)
   const diffText = assembleCombinedDiff(
     changedFiles,
@@ -86,10 +97,26 @@ export function buildWorldSyncDraft(workspace, syncState, worldModel) {
 
   return {
     changedFiles,
+    currentSnapshot,
     diffText,
     elementsMd: getElementsIndexMarkdown(worldModel),
     eventsMd: getEventsIndexMarkdown(worldModel),
+    lastSyncedSnapshot,
     selectedFileIds,
+  }
+}
+
+export function rebuildWorldSyncDiff(changedFiles, selectedFileIds, currentSnapshot, lastSyncedSnapshot) {
+  const normalizedSelectedFileIds = normalizeSelectedFileIdentifiers(changedFiles, selectedFileIds)
+
+  return {
+    diffText: assembleCombinedDiff(
+      changedFiles,
+      normalizedSelectedFileIds,
+      currentSnapshot,
+      lastSyncedSnapshot,
+    ),
+    selectedFileIds: normalizedSelectedFileIds,
   }
 }
 

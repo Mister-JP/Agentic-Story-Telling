@@ -18,7 +18,19 @@ function buildSelectedFilesLabel(selectedFileIds) {
   return `${fileCount} selected`
 }
 
-function getStepDescription(status) {
+function getStepDescription(status, step) {
+  if (step === REVIEW_STEPS.DIFF_PREVIEW) {
+    if (status === 'active') {
+      return 'Choose files to include'
+    }
+
+    if (status === 'completed') {
+      return 'Selection confirmed'
+    }
+
+    return 'Waiting to begin'
+  }
+
   if (status === 'active') {
     return 'Approve or request changes'
   }
@@ -43,6 +55,7 @@ function buildAttemptLabel(reviewSession) {
 }
 
 function SyncReviewSidebar({ onDiscard, reviewSession }) {
+  const diffPreviewStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.DIFF_PREVIEW)
   const eventsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
   const elementsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
   const elementDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENT_DETAILS)
@@ -59,7 +72,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
           <Text className="eyebrow">Review Mode</Text>
           <Text className="panel-title review-sidebar-title">World Sync</Text>
           <Text className="panel-meta">
-            Review the index passes first, then resolve each detail file one target at a time while the canonical world model stays untouched.
+            Select the changed files first, then review the index passes and resolve each detail file while the canonical world model stays untouched.
           </Text>
         </Box>
 
@@ -74,25 +87,29 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
         </Stack>
 
         <Stepper
-          active={getReviewStepperActive(reviewSession.step)}
+          active={getReviewStepperActive(reviewSession.step) + 1}
           allowNextStepsSelect={false}
           className="review-stepper"
           orientation="vertical"
         >
           <Stepper.Step
-            description={getStepDescription(eventsStepStatus)}
+            description={getStepDescription(diffPreviewStatus, REVIEW_STEPS.DIFF_PREVIEW)}
+            label="Select Changes"
+          />
+          <Stepper.Step
+            description={getStepDescription(eventsStepStatus, REVIEW_STEPS.EVENTS_INDEX)}
             label="Events Index"
           />
           <Stepper.Step
-            description={getStepDescription(elementsStepStatus)}
+            description={getStepDescription(elementsStepStatus, REVIEW_STEPS.ELEMENTS_INDEX)}
             label="Elements Index"
           />
           <Stepper.Step
-            description={getStepDescription(elementDetailsStepStatus)}
+            description={getStepDescription(elementDetailsStepStatus, REVIEW_STEPS.ELEMENT_DETAILS)}
             label={buildDetailStepLabel('Element Details', completedElementDetails, totalElementDetails)}
           />
           <Stepper.Step
-            description={getStepDescription(eventDetailsStepStatus)}
+            description={getStepDescription(eventDetailsStepStatus, REVIEW_STEPS.EVENT_DETAILS)}
             label={buildDetailStepLabel('Event Details', completedEventDetails, totalEventDetails)}
           />
         </Stepper>
