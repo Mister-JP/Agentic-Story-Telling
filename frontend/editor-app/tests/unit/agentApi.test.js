@@ -4,7 +4,9 @@ import {
   ApiClientError,
   applyElementsIndex,
   applyEventsIndex,
+  proposeElementDetail,
   proposeElementsIndex,
+  proposeEventDetail,
   proposeEventsIndex,
 } from '../../src/utils/agentApi.js'
 
@@ -132,6 +134,86 @@ describe('agentApi', () => {
       }),
     )
     expect(responseBody.detail_files.elt_stub123).toBe('# Cloth Bundle')
+  })
+
+  it('posts to the element detail endpoint and returns the merged detail payload', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        proposal: {
+          changed: true,
+          rationale: 'Adds a chronology entry.',
+          approval_message: 'Ready to review.',
+        },
+        preview_diff: '--- a/elements/elt_stub123.md',
+        updated_detail_md: '# Cloth Bundle',
+      }),
+    })
+
+    const responseBody = await proposeElementDetail({
+      diff_text: '+ Added line',
+      elements_md: '# Elements',
+      events_md: '# Events',
+      target: {
+        uuid: 'elt_stub123',
+        summary: 'Cloth Bundle',
+        file: 'elements/elt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the detail file.',
+        kind: 'item',
+      },
+      current_detail_md: '',
+      history: [],
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/element-detail/propose'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.preview_diff).toContain('elt_stub123.md')
+  })
+
+  it('posts to the event detail endpoint and returns the merged detail payload', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        proposal: {
+          changed: false,
+          rationale: 'No change needed.',
+          approval_message: 'Ready to review.',
+        },
+        preview_diff: '',
+        updated_detail_md: '# Event detail',
+      }),
+    })
+
+    const responseBody = await proposeEventDetail({
+      diff_text: '+ Added line',
+      events_md: '# Events',
+      target: {
+        uuid: 'evt_stub123',
+        summary: 'Cloth bundle arrives',
+        file: 'events/evt_stub123.md',
+        delta_action: 'update',
+        update_context: 'Keep the file unchanged.',
+      },
+      current_detail_md: '# Event detail',
+      history: [],
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/event-detail/propose'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.updated_detail_md).toBe('# Event detail')
   })
 
   it('throws a typed ApiClientError for structured error responses', async () => {

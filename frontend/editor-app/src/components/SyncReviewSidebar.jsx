@@ -3,9 +3,10 @@ import PropTypes from 'prop-types'
 import {
   REVIEW_STEPS,
   REVIEW_STEP_VALUES,
-  getIndexReviewStepStatus,
-  getIndexReviewStepperActive,
+  getReviewStepStatus,
+  getReviewStepperActive,
 } from '../utils/reviewSteps.js'
+import { countCompletedDetailTargets } from '../utils/syncReview.js'
 
 function buildChangedFilesLabel(changedFiles) {
   const fileCount = changedFiles.length
@@ -29,6 +30,10 @@ function getStepDescription(status) {
   return 'Waiting to begin'
 }
 
+function buildDetailStepLabel(baseLabel, completedCount, totalCount) {
+  return `${baseLabel} (${completedCount}/${totalCount})`
+}
+
 function buildAttemptLabel(reviewSession) {
   if (reviewSession.attemptNumber > 0) {
     return `Current attempt: ${reviewSession.attemptNumber}`
@@ -38,8 +43,14 @@ function buildAttemptLabel(reviewSession) {
 }
 
 function SyncReviewSidebar({ onDiscard, reviewSession }) {
-  const eventsStepStatus = getIndexReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
-  const elementsStepStatus = getIndexReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
+  const eventsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
+  const elementsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
+  const elementDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENT_DETAILS)
+  const eventDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENT_DETAILS)
+  const completedElementDetails = countCompletedDetailTargets(reviewSession, REVIEW_STEPS.ELEMENT_DETAILS)
+  const completedEventDetails = countCompletedDetailTargets(reviewSession, REVIEW_STEPS.EVENT_DETAILS)
+  const totalElementDetails = reviewSession.elementDetailTargets?.length ?? 0
+  const totalEventDetails = reviewSession.eventDetailTargets?.length ?? 0
 
   return (
     <Stack className="review-sidebar" gap="lg" h="100%" justify="space-between">
@@ -48,7 +59,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
           <Text className="eyebrow">Review Mode</Text>
           <Text className="panel-title review-sidebar-title">World Sync</Text>
           <Text className="panel-meta">
-            Stage 2 adds element creation and update review while keeping the world model untouched until both steps are approved.
+            Review the index passes first, then resolve each detail file one target at a time while the canonical world model stays untouched.
           </Text>
         </Box>
 
@@ -63,7 +74,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
         </Stack>
 
         <Stepper
-          active={getIndexReviewStepperActive(reviewSession.step)}
+          active={getReviewStepperActive(reviewSession.step)}
           allowNextStepsSelect={false}
           className="review-stepper"
           orientation="vertical"
@@ -76,12 +87,20 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
             description={getStepDescription(elementsStepStatus)}
             label="Elements Index"
           />
+          <Stepper.Step
+            description={getStepDescription(elementDetailsStepStatus)}
+            label={buildDetailStepLabel('Element Details', completedElementDetails, totalElementDetails)}
+          />
+          <Stepper.Step
+            description={getStepDescription(eventDetailsStepStatus)}
+            label={buildDetailStepLabel('Event Details', completedEventDetails, totalEventDetails)}
+          />
         </Stepper>
 
         <Box className="review-sidebar-note">
-          <Text className="review-sidebar-note-title">All-or-nothing for this slice</Text>
+          <Text className="review-sidebar-note-title">All-or-nothing sync</Text>
           <Text className="review-sidebar-note-copy">
-            Discarding exits review mode and leaves the current world model untouched.
+            Canceling exits review mode, discards staged results, and leaves the current world model untouched.
           </Text>
         </Box>
       </Stack>
@@ -92,7 +111,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
         onClick={onDiscard}
         variant="default"
       >
-        Discard Review
+        Cancel Sync
       </Button>
     </Stack>
   )
@@ -103,6 +122,9 @@ SyncReviewSidebar.propTypes = {
   reviewSession: PropTypes.shape({
     attemptNumber: PropTypes.number.isRequired,
     changedFiles: PropTypes.arrayOf(PropTypes.object).isRequired,
+    detailResults: PropTypes.object,
+    elementDetailTargets: PropTypes.array,
+    eventDetailTargets: PropTypes.array,
     isLoading: PropTypes.bool.isRequired,
     selectedFileIds: PropTypes.arrayOf(PropTypes.string).isRequired,
     step: PropTypes.oneOf(REVIEW_STEP_VALUES).isRequired,

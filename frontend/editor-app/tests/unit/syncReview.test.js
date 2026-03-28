@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { WORKSPACE_TWO_FILES } from '../fixtures/diffEngine.js'
 import { buildWorldModelFixture } from '../fixtures/worldModel.js'
 import {
+  applyCompletedSyncReviewResult,
   applyStagedIndexReviewResult,
+  buildElementDetailTargets,
+  buildEventDetailTargets,
+  countCompletedDetailTargets,
+  createDetailReviewSession,
   createElementsIndexReviewSession,
   createIndexReviewSession,
   createReviewHistoryEntry,
@@ -87,6 +92,15 @@ describe('syncReview helpers', () => {
         },
         events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
       },
+      [
+        {
+          uuid: 'evt_stub123',
+          summary: 'Stub event',
+          file: 'events/evt_stub123.md',
+          delta_action: 'create',
+          update_context: 'Create the event dossier.',
+        },
+      ],
     )
 
     expect(reviewSession.step).toBe('elements-index')
@@ -94,6 +108,15 @@ describe('syncReview helpers', () => {
     expect(reviewSession.updatedEventsState.actions).toEqual(['Created event evt_stub123.'])
     expect(reviewSession.history).toEqual(carriedHistory)
     expect(reviewSession.historyBaseCount).toBe(1)
+    expect(reviewSession.eventDetailTargets).toEqual([
+      {
+        uuid: 'evt_stub123',
+        summary: 'Stub event',
+        file: 'events/evt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the event dossier.',
+      },
+    ])
     expect(reviewSession.isLoading).toBe(true)
   })
 
@@ -102,6 +125,23 @@ describe('syncReview helpers', () => {
     expect(getReviewAttemptNumber([{ attempt_number: 1 }], 0)).toBe(2)
     expect(getReviewAttemptNumber([{ attempt_number: 1 }], 1)).toBe(1)
     expect(getReviewAttemptNumber([{ attempt_number: 1 }, { attempt_number: 2 }], 1)).toBe(2)
+  })
+
+  it('fails fast when creating a detail review session without any targets', () => {
+    const currentSession = createIndexReviewSession(
+      WORKSPACE_TWO_FILES,
+      {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      null,
+    )
+
+    expect(() => createDetailReviewSession(currentSession, {
+      detailTargets: [],
+      step: 'element-details',
+    })).toThrow('Cannot create element-details review session without detail targets.')
   })
 
   it('applies staged events and elements output into a new world model and sync snapshot', () => {
@@ -219,5 +259,177 @@ describe('syncReview helpers', () => {
 
     expect(appliedReview.worldModel.elements.indexPreamble).toBe('# Elements')
     expect(getElementsIndexMarkdown(appliedReview.worldModel)).toContain('# Elements')
+  })
+
+  it('builds event detail targets from the approved events proposal and apply response', () => {
+    const detailTargets = buildEventDetailTargets(
+      '# Events\n\n## Entries\n',
+      {
+        actions: ['Created event evt_stub123.'],
+        detail_files: {
+          evt_stub123: '# Stub event\n\n## Core Understanding\nStub detail\n',
+        },
+        events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
+      },
+      {
+        deltas: [
+          {
+            action: 'create',
+            when: 'June 28, 1998',
+            chapters: 'Chapter 8',
+            summary: 'Stub event',
+            reason: 'Create the event dossier.',
+          },
+        ],
+      },
+    )
+
+    expect(detailTargets).toEqual([
+      {
+        uuid: 'evt_stub123',
+        summary: 'Stub event',
+        file: 'events/evt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the event dossier.',
+      },
+    ])
+  })
+
+  it('builds element detail targets from the approved elements proposal and apply response', () => {
+    const detailTargets = buildElementDetailTargets(
+      '# Elements\n\n## Entries\n',
+      {
+        actions: ['Created element elt_stub123: Cloth Bundle (item).'],
+        detail_files: {
+          elt_stub123: '# Cloth Bundle\n\n## Core Understanding\nStub detail\n',
+        },
+        elements_md: '# Elements\n\n## Entries\n- item | Cloth Bundle | elt_stub123 | cloth bundle | altar evidence\n',
+      },
+      {
+        identified_elements: [
+          {
+            display_name: 'Cloth Bundle',
+            kind: 'item',
+            aliases: ['cloth bundle'],
+            identification_keys: ['altar evidence'],
+            update_instruction: 'Create the detail dossier.',
+            is_new: true,
+            matched_existing_uuid: null,
+          },
+        ],
+      },
+    )
+
+    expect(detailTargets).toEqual([
+      {
+        uuid: 'elt_stub123',
+        summary: 'Cloth Bundle',
+        file: 'elements/elt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the detail dossier.',
+        kind: 'item',
+      },
+    ])
+  })
+
+  it('applies approved detail results only after the full review session completes', () => {
+    const appliedReview = applyCompletedSyncReviewResult({
+      currentSyncState: {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      currentWorldModel: null,
+      reviewSession: {
+        detailResults: {
+          elt_stub123: {
+            action: 'approved',
+            updatedMd: '# Cloth Bundle\n\n## Core Understanding\nApproved detail\n',
+          },
+          evt_stub123: {
+            action: 'skipped',
+          },
+        },
+        selectedFileIds: ['chapter-07'],
+        updatedEventsState: {
+          actions: ['Created event evt_stub123.'],
+          detail_files: {
+            evt_stub123: '# Stub event\n\n## Core Understanding\nOriginal stub detail\n',
+          },
+          events_md: '# Events\n\n## Entries\n- evt_stub123 | June 28, 1998 | Chapter 8 | Stub event\n',
+        },
+        updatedElementsState: {
+          actions: ['Created element elt_stub123: Cloth Bundle (item).'],
+          detail_files: {
+            elt_stub123: '# Cloth Bundle\n\n## Core Understanding\nOriginal stub detail\n',
+          },
+          elements_md: '# Elements\n\n## Entries\n- item | Cloth Bundle | elt_stub123 | cloth bundle | altar evidence\n',
+        },
+      },
+      workspace: WORKSPACE_TWO_FILES,
+    })
+
+    expect(appliedReview.worldModel.elements.details.elt_stub123).toContain('Approved detail')
+    expect(appliedReview.worldModel.events.details.evt_stub123).toContain('Original stub detail')
+    expect(appliedReview.syncState.status).toBe('synced')
+  })
+
+  it('counts only approved detail targets in the sidebar progress', () => {
+    expect(countCompletedDetailTargets({
+      detailResults: {
+        elt_stub123: { action: 'approved', updatedMd: '# Approved detail' },
+        elt_skipped456: { action: 'skipped' },
+      },
+      elementDetailTargets: [
+        { uuid: 'elt_stub123' },
+        { uuid: 'elt_skipped456' },
+      ],
+    }, 'element-details')).toBe(1)
+  })
+
+  it('routes approved detail markdown by explicit target type instead of UUID prefixes', () => {
+    const appliedReview = applyCompletedSyncReviewResult({
+      currentSyncState: {
+        status: 'never_synced',
+        lastSyncedAt: null,
+        lastSyncedSnapshot: {},
+      },
+      currentWorldModel: null,
+      reviewSession: {
+        detailResults: {
+          detail_custom_1: {
+            action: 'approved',
+            targetType: 'element',
+            updatedMd: '# Custom element detail\n',
+          },
+          detail_custom_2: {
+            action: 'approved',
+            targetType: 'event',
+            updatedMd: '# Custom event detail\n',
+          },
+        },
+        elementDetailTargets: [{ uuid: 'detail_custom_1' }],
+        eventDetailTargets: [{ uuid: 'detail_custom_2' }],
+        selectedFileIds: ['chapter-07'],
+        updatedEventsState: {
+          actions: [],
+          detail_files: {
+            detail_custom_2: '# Original event detail\n',
+          },
+          events_md: '# Events\n\n## Entries\n- detail_custom_2 | June 28, 1998 | Chapter 8 | Stub event\n',
+        },
+        updatedElementsState: {
+          actions: [],
+          detail_files: {
+            detail_custom_1: '# Original element detail\n',
+          },
+          elements_md: '# Elements\n\n## Entries\n- item | Cloth Bundle | detail_custom_1 | cloth bundle | altar evidence\n',
+        },
+      },
+      workspace: WORKSPACE_TWO_FILES,
+    })
+
+    expect(appliedReview.worldModel.elements.details.detail_custom_1).toContain('Custom element detail')
+    expect(appliedReview.worldModel.events.details.detail_custom_2).toContain('Custom event detail')
   })
 })

@@ -123,3 +123,11 @@ export async function proposeElementsIndex(payload) {
 export async function applyElementsIndex(payload) {
   return postJson('/harness/elements-index/apply', payload)
 }
+
+export async function proposeElementDetail(payload) {
+  return postJson('/harness/element-detail/propose', payload)
+}
+
+export async function proposeEventDetail(payload) {
+  return postJson('/harness/event-detail/propose', payload)
+}

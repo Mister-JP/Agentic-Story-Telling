@@ -61,6 +61,35 @@ describe('SyncReviewSidebar', () => {
     expect(screen.getByText('Approved and staged')).toBeInTheDocument()
   })
 
+  it('shows detail step counters once the session reaches element detail review', () => {
+    renderSidebar({
+      attemptNumber: 1,
+      changedFiles: [{ fileId: 'chapter-08' }],
+      detailResults: {
+        elt_stub123: { action: 'approved', updatedMd: '# Approved detail' },
+      },
+      elementDetailTargets: [
+        {
+          uuid: 'elt_stub123',
+        },
+        {
+          uuid: 'elt_mira123',
+        },
+      ],
+      eventDetailTargets: [
+        {
+          uuid: 'evt_stub123',
+        },
+      ],
+      isLoading: false,
+      selectedFileIds: ['chapter-08'],
+      step: 'element-details',
+    })
+
+    expect(screen.getByText('Element Details (1/2)')).toBeInTheDocument()
+    expect(screen.getByText('Event Details (0/1)')).toBeInTheDocument()
+  })
+
   it('keeps both index steps pending during diff preview', () => {
     renderSidebar({
       attemptNumber: 0,
@@ -70,25 +99,35 @@ describe('SyncReviewSidebar', () => {
       step: 'diff-preview',
     })
 
-    expect(screen.getAllByText('Waiting to begin')).toHaveLength(2)
+    expect(screen.getAllByText('Waiting to begin')).toHaveLength(4)
     expect(screen.queryByText('Approve or request changes')).not.toBeInTheDocument()
     expect(screen.queryByText('Approved and staged')).not.toBeInTheDocument()
   })
 
-  it.each(['element-details', 'event-details', 'complete'])(
-    'marks both index steps completed after index review reaches %s',
-    (step) => {
+  it.each([
+    ['element-details', 2],
+    ['event-details', 3],
+    ['complete', 4],
+  ])(
+    'marks completed steps correctly after review reaches %s',
+    (step, completedCount) => {
       renderSidebar({
         attemptNumber: 2,
         changedFiles: [{ fileId: 'chapter-08' }],
+        detailResults: {},
+        elementDetailTargets: [],
+        eventDetailTargets: [],
         isLoading: false,
         selectedFileIds: ['chapter-08'],
         step,
       })
 
-      expect(screen.getAllByText('Approved and staged')).toHaveLength(2)
-      expect(screen.queryByText('Approve or request changes')).not.toBeInTheDocument()
-      expect(screen.queryByText('Waiting to begin')).not.toBeInTheDocument()
+      expect(screen.getAllByText('Approved and staged')).toHaveLength(completedCount)
+      if (step === 'element-details') {
+        expect(screen.getAllByText('Waiting to begin')).toHaveLength(1)
+      } else {
+        expect(screen.queryByText('Waiting to begin')).not.toBeInTheDocument()
+      }
     },
   )
 })

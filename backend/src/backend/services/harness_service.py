@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from backend.schemas import (
     ElementDetailProposeRequest,
@@ -17,6 +17,14 @@ from backend.schemas import (
     EventsIndexProposeRequest,
     EventsIndexProposeResponse,
 )
+from backend.services.detail_review import (
+    DetailProposalProvider,
+    OpenAICompatibleDetailProposalProvider,
+    build_element_detail_response,
+    build_element_prompt_context,
+    build_event_detail_response,
+    build_event_prompt_context,
+)
 from backend.services.elements_index_logic import (
     apply_elements_proposal,
     propose_elements_index_with_audit,
@@ -30,6 +38,7 @@ from backend.services.stub_payloads import (
 from backend.temp_storage import LayerContent, validate_layer_name
 
 
+@runtime_checkable
 class HarnessService(Protocol):
     def propose_events_index(self, request: EventsIndexProposeRequest) -> EventsIndexProposeResponse: ...
 
@@ -82,7 +91,11 @@ class StubHarnessService:
             request.current_detail_md,
             request.elements_md,
         )
-        normalized_detail_markdown = normalize_detail_markdown("elements", request.target.uuid, detail_result.updated_detail_markdown)
+        normalized_detail_markdown = normalize_detail_markdown(
+            "elements",
+            request.target.uuid,
+            detail_result.updated_detail_markdown,
+        )
         return ElementDetailProposeResponse(
             proposal=proposal,
             preview_diff=detail_result.preview_diff,
@@ -95,9 +108,82 @@ class StubHarnessService:
             request.current_detail_md,
             request.events_md,
         )
-        normalized_detail_markdown = normalize_detail_markdown("events", request.target.uuid, detail_result.updated_detail_markdown)
+        normalized_detail_markdown = normalize_detail_markdown(
+            "events",
+            request.target.uuid,
+            detail_result.updated_detail_markdown,
+        )
         return EventDetailProposeResponse(
             proposal=proposal,
+            preview_diff=detail_result.preview_diff,
+            updated_detail_md=normalized_detail_markdown,
+        )
+
+
+@dataclass(slots=True)
+class RealHarnessService:
+    detail_proposal_provider: DetailProposalProvider
+
+    @classmethod
+    def from_env(cls) -> "RealHarnessService":
+        return cls(detail_proposal_provider=OpenAICompatibleDetailProposalProvider.from_env())
+
+    def propose_events_index(self, request: EventsIndexProposeRequest) -> EventsIndexProposeResponse:
+        proposal = build_stub_event_agent_output(request.diff_text)
+        return EventsIndexProposeResponse(proposal=proposal)
+
+    def apply_events_index(self, request: EventsIndexApplyRequest) -> EventsIndexApplyResponse:
+        apply_result = build_events_apply_result(request.events_md, request.proposal)
+        normalized_content = normalize_layer_content("events", apply_result.index_markdown, apply_result.detail_files)
+        return EventsIndexApplyResponse(
+            events_md=normalized_content.index_markdown,
+            detail_files=normalized_content.detail_files,
+            actions=apply_result.actions,
+        )
+
+    def propose_elements_index(self, request: ElementsIndexProposeRequest) -> ElementsIndexProposeResponse:
+        proposal = propose_elements_index_with_audit(
+            request.diff_text,
+            request.elements_md,
+            request.history,
+        )
+        return ElementsIndexProposeResponse(proposal=proposal)
+
+    def apply_elements_index(self, request: ElementsIndexApplyRequest) -> ElementsIndexApplyResponse:
+        apply_result = apply_elements_proposal(request.elements_md, request.proposal)
+        normalized_content = normalize_layer_content("elements", apply_result.index_markdown, apply_result.detail_files)
+        return ElementsIndexApplyResponse(
+            elements_md=normalized_content.index_markdown,
+            detail_files=normalized_content.detail_files,
+            actions=apply_result.actions,
+        )
+
+    def propose_element_detail(self, request: ElementDetailProposeRequest) -> ElementDetailProposeResponse:
+        prompt_context = build_element_prompt_context(request)
+        proposal = self.detail_proposal_provider.propose_element_detail(request, prompt_context)
+        detail_result = build_element_detail_response(request, proposal, prompt_context=prompt_context)
+        normalized_detail_markdown = normalize_detail_markdown(
+            "elements",
+            request.target.uuid,
+            detail_result.updated_detail_md,
+        )
+        return ElementDetailProposeResponse(
+            proposal=detail_result.proposal,
+            preview_diff=detail_result.preview_diff,
+            updated_detail_md=normalized_detail_markdown,
+        )
+
+    def propose_event_detail(self, request: EventDetailProposeRequest) -> EventDetailProposeResponse:
+        prompt_context = build_event_prompt_context(request)
+        proposal = self.detail_proposal_provider.propose_event_detail(request, prompt_context)
+        detail_result = build_event_detail_response(request, proposal, prompt_context=prompt_context)
+        normalized_detail_markdown = normalize_detail_markdown(
+            "events",
+            request.target.uuid,
+            detail_result.updated_detail_md,
+        )
+        return EventDetailProposeResponse(
+            proposal=detail_result.proposal,
             preview_diff=detail_result.preview_diff,
             updated_detail_md=normalized_detail_markdown,
         )

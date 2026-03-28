@@ -10,6 +10,7 @@ function renderPanel(reviewSession) {
         onApprove={vi.fn()}
         onRequestChanges={vi.fn()}
         onRetry={vi.fn()}
+        onSkip={vi.fn()}
         reviewSession={reviewSession}
       />
     </MantineProvider>,
@@ -133,8 +134,100 @@ describe('SyncReviewPanel', () => {
     expect(screen.queryByTestId('element-decision-card')).not.toBeInTheDocument()
   })
 
-  it.each(['diff-preview', 'element-details', 'event-details', 'complete'])(
-    'renders nothing for non-index review step %s',
+  it('renders the detail review state for element detail targets', () => {
+    renderPanel({
+      attemptNumber: 2,
+      currentDetailIndex: 1,
+      currentPreviewDiff: '--- a/elements/elt_stub123.md\n+++ b/elements/elt_stub123.md',
+      currentProposal: {
+        changed: true,
+        rationale: 'Adds a chronology entry.',
+      },
+      detailTargets: [
+        {
+          uuid: 'elt_stub123',
+          summary: 'Cloth Bundle',
+          file: 'elements/elt_stub123.md',
+          delta_action: 'create',
+          update_context: 'Create the detail dossier.',
+        },
+        {
+          uuid: 'elt_mira123',
+          summary: 'Mira',
+          file: 'elements/elt_mira123.md',
+          delta_action: 'update',
+          update_context: 'Tighten the chronology.',
+        },
+      ],
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      step: 'element-details',
+    })
+
+    expect(screen.getByTestId('element-detail-review')).toBeInTheDocument()
+    expect(screen.getByTestId('detail-review-progress')).toHaveTextContent('2 of 2')
+    expect(screen.getByTestId('detail-diff-viewer')).toBeInTheDocument()
+  })
+
+  it('shows a no-change message instead of a blank diff for detail review', () => {
+    renderPanel({
+      attemptNumber: 1,
+      currentDetailIndex: 0,
+      currentPreviewDiff: '',
+      currentProposal: {
+        changed: false,
+        rationale: 'Nothing in the diff affects this file.',
+      },
+      detailTargets: [
+        {
+          uuid: 'evt_stub123',
+          summary: 'Chapel arrival',
+          file: 'events/evt_stub123.md',
+          delta_action: 'update',
+          update_context: 'No change needed.',
+        },
+      ],
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      step: 'event-details',
+    })
+
+    expect(screen.getByTestId('event-detail-review')).toBeInTheDocument()
+    expect(screen.getByTestId('detail-no-change-message')).toBeInTheDocument()
+  })
+
+  it('shows a warning when the backend reports changes but the preview diff is empty', () => {
+    renderPanel({
+      attemptNumber: 1,
+      currentDetailIndex: 0,
+      currentPreviewDiff: '   ',
+      currentProposal: {
+        changed: true,
+        rationale: 'The generated markdown changed shape even though the diff is blank.',
+      },
+      detailTargets: [
+        {
+          uuid: 'evt_stub123',
+          summary: 'Chapel arrival',
+          file: 'events/evt_stub123.md',
+          delta_action: 'update',
+          update_context: 'Investigate the blank diff.',
+        },
+      ],
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      step: 'event-details',
+    })
+
+    expect(screen.getByTestId('detail-empty-diff-warning-title')).toBeInTheDocument()
+    expect(screen.queryByTestId('detail-no-change-message')).not.toBeInTheDocument()
+  })
+
+  it.each(['diff-preview', 'complete'])(
+    'renders nothing for non-review-panel step %s',
     (step) => {
       renderPanel({
         attemptNumber: 2,

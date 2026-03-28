@@ -29,6 +29,10 @@ function getDialogTitle(action, targetNode) {
     return 'Start a new project'
   }
 
+  if (action === 'cancelReview') {
+    return 'Cancel world sync'
+  }
+
   if (targetNode?.type === 'folder') {
     return 'Delete folder'
   }
@@ -85,13 +89,14 @@ function WorkspaceDialog({
   draftName,
   error,
   onClose,
+  onConfirmCancelReview,
   onConfirmDelete,
   onConfirmNewProject,
   onDraftNameChange,
   onSubmit,
   targetNode,
 }) {
-  const isConfirmationAction = action === 'delete' || action === 'newProject'
+  const isConfirmationAction = action === 'delete' || action === 'newProject' || action === 'cancelReview'
   const deleteCopy = action === 'delete' ? getDeleteCopy(targetNode, deleteStats) : null
 
   return (
@@ -109,6 +114,13 @@ function WorkspaceDialog({
               Start a new project? This replaces the current browser copy with the starter
               workspace. Download the current project first if you want a backup.
             </Text>
+          ) : action === 'cancelReview' ? (
+            <Stack gap={6}>
+              <Text fw={600}>Cancel the current world sync?</Text>
+              <Text className="panel-meta">
+                This discards every staged index approval and detail review result, then returns to World mode with the existing world model unchanged.
+              </Text>
+            </Stack>
           ) : (
             <>
               <Stack gap={6}>
@@ -127,6 +139,10 @@ function WorkspaceDialog({
             {action === 'newProject' ? (
               <Button onClick={onConfirmNewProject}>
                 Replace project
+              </Button>
+            ) : action === 'cancelReview' ? (
+              <Button data-testid="confirm-cancel-review-button" onClick={onConfirmCancelReview}>
+                Cancel sync
               </Button>
             ) : (
               <Button className="dialog-destructive-action" onClick={onConfirmDelete}>
@@ -183,6 +199,7 @@ WorkspaceDialog.propTypes = {
   draftName: PropTypes.string.isRequired,
   error: PropTypes.string.isRequired,
   onClose: PropTypes.func.isRequired,
+  onConfirmCancelReview: PropTypes.func.isRequired,
   onConfirmDelete: PropTypes.func.isRequired,
   onConfirmNewProject: PropTypes.func.isRequired,
   onDraftNameChange: PropTypes.func.isRequired,

@@ -4,11 +4,20 @@ from dataclasses import dataclass
 import logging
 
 from fastapi.testclient import TestClient
+import pytest
 
 from backend.dependencies import get_harness_service
 from backend.errors import ApiError
 from backend.main import create_app
-from backend.schemas import ElementDecision, ElementKind
+from backend.schemas import (
+    ElementDecision,
+    ElementDetailProposeResponse,
+    ElementFileUpdateProposal,
+    ElementKind,
+    EventDetailProposeResponse,
+    EventFileUpdateProposal,
+)
+from backend.services.harness_service import HarnessService
 from backend.services.stub_payloads import build_element_detail_file
 
 
@@ -328,6 +337,107 @@ class ElementsIndexFailingHarnessService:
         raise AssertionError("Unexpected route call.")
 
 
+@dataclass
+class DetailNoopHarnessService:
+    def propose_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_element_detail(self, request):
+        return ElementDetailProposeResponse(
+            proposal=ElementFileUpdateProposal(
+                changed=False,
+                rationale="Nothing new reached this file.",
+                approval_message="No changes needed.",
+            ),
+            preview_diff="",
+            updated_detail_md=request.current_detail_md,
+        )
+
+    def propose_event_detail(self, request):
+        return EventDetailProposeResponse(
+            proposal=EventFileUpdateProposal(
+                changed=False,
+                rationale="Nothing new reached this file.",
+                approval_message="No changes needed.",
+            ),
+            preview_diff="",
+            updated_detail_md=request.current_detail_md,
+        )
+
+
+@dataclass
+class DetailChangedHarnessService:
+    def propose_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_element_detail(self, request):
+        return ElementDetailProposeResponse(
+            proposal=ElementFileUpdateProposal(
+                changed=True,
+                rationale="The diff adds a new canon detail.",
+                approval_message="Apply the update.",
+            ),
+            preview_diff=f"--- a/{request.target.file}\n+++ b/{request.target.file}\n@@",
+            updated_detail_md=f"{request.current_detail_md.strip()}\n\n## Open Threads\n- Verify the new canon detail.\n",
+        )
+
+    def propose_event_detail(self, request):
+        return EventDetailProposeResponse(
+            proposal=EventFileUpdateProposal(
+                changed=True,
+                rationale="The diff adds a new event implication.",
+                approval_message="Apply the update.",
+            ),
+            preview_diff=f"--- a/{request.target.file}\n+++ b/{request.target.file}\n@@",
+            updated_detail_md=f"{request.current_detail_md.strip()}\n\n## Open Threads\n- Trace the new consequence.\n",
+        )
+
+
+@dataclass
+class DetailFailingHarnessService:
+    failure: Exception
+
+    def propose_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_events_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def apply_elements_index(self, _request):
+        raise AssertionError("Unexpected route call.")
+
+    def propose_element_detail(self, _request):
+        raise self.failure
+
+    def propose_event_detail(self, _request):
+        raise self.failure
+
+
+def test_detail_noop_harness_service_matches_harness_protocol() -> None:
+    assert isinstance(DetailNoopHarnessService(), HarnessService)
+
+
 def test_shared_error_mapping_covers_retryable_and_non_retryable_failures() -> None:
     failure_cases = [
         (ApiError("llm_timeout", "Timed out.", 504, True), 504, "llm_timeout", True),
@@ -372,6 +482,66 @@ def test_elements_index_propose_uses_shared_error_envelope_for_audit_failures() 
     assert response_body["details"] == [
         "Coverage gap: the diff explicitly names Mira, but the proposal omitted her.",
     ]
+
+
+def test_detail_routes_handle_changed_false_without_diff() -> None:
+    client = build_client(service_override=DetailNoopHarnessService())
+
+    element_response = client.post("/harness/element-detail/propose", json=build_detail_payload("element"))
+    event_response = client.post("/harness/event-detail/propose", json=build_detail_payload("event"))
+
+    assert element_response.status_code == 200
+    assert element_response.json()["proposal"]["changed"] is False
+    assert element_response.json()["preview_diff"] == ""
+    assert element_response.json()["updated_detail_md"] == build_detail_payload("element")["current_detail_md"].strip()
+
+    assert event_response.status_code == 200
+    assert event_response.json()["proposal"]["changed"] is False
+    assert event_response.json()["preview_diff"] == ""
+    assert event_response.json()["updated_detail_md"] == build_detail_payload("event")["current_detail_md"].strip()
+
+
+@pytest.mark.parametrize(
+    ("endpoint_path", "payload_builder"),
+    [
+        ("/harness/element-detail/propose", lambda: build_detail_payload("element")),
+        ("/harness/event-detail/propose", lambda: build_detail_payload("event")),
+    ],
+)
+def test_detail_routes_return_non_empty_diff_for_changed_proposals(endpoint_path, payload_builder) -> None:
+    client = build_client(service_override=DetailChangedHarnessService())
+
+    response = client.post(endpoint_path, json=payload_builder())
+    response_body = response.json()
+
+    assert response.status_code == 200
+    assert response_body["proposal"]["changed"] is True
+    assert response_body["preview_diff"].startswith("--- a/")
+    assert response_body["updated_detail_md"].startswith("# Stubbed detail target")
+
+
+@pytest.mark.parametrize(
+    ("endpoint_path", "payload_builder"),
+    [
+        ("/harness/element-detail/propose", lambda: build_detail_payload("element")),
+        ("/harness/event-detail/propose", lambda: build_detail_payload("event")),
+    ],
+)
+def test_detail_routes_use_shared_error_envelope_when_service_fails(endpoint_path, payload_builder) -> None:
+    client = build_client(
+        service_override=DetailFailingHarnessService(
+            failure=ApiError("llm_error", "Upstream detail generation failed.", 502, True),
+        ),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(endpoint_path, json=payload_builder())
+    response_body = response.json()
+
+    assert response.status_code == 502
+    assert response_body["error"] == "llm_error"
+    assert response_body["message"] == "Upstream detail generation failed."
+    assert response_body["retryable"] is True
 
 
 def test_unexpected_errors_are_logged(caplog) -> None:
