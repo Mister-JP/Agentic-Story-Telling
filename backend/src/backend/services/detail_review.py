@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import socket
-from typing import NoReturn, Protocol
+from typing import NoReturn, Protocol, TypeVar
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import urlsplit
@@ -24,15 +24,18 @@ from backend.schemas import (
     ElementDetailProposeResponse,
     ElementFileUpdateProposal,
     ElementKind,
+    EventAgentOutput,
     EventDetailProposeRequest,
     EventDetailProposeResponse,
     EventFileUpdateProposal,
+    EventsIndexProposeRequest,
     HistoryEntry,
 )
 
 ELEMENT_FIELD_NAMES = ["kind", "display_name", "uuid", "aliases", "identification_keys"]
 EVENT_FIELD_NAMES = ["uuid", "when", "chapters", "summary"]
 logger = logging.getLogger(__name__)
+SchemaModelT = TypeVar("SchemaModelT", bound=BaseModel)
 
 DEFAULT_FEEDBACK_TEMPLATE = """
 ═══ REVIEWER FEEDBACK ═══
@@ -252,6 +255,105 @@ Enrich with deeper understanding, causal context, and consequences.
 Preserve existing content that is still accurate.
 """
 
+EVENTS_INDEX_SYSTEM_PROMPT = """
+You are the Events Index Agent.
+
+Your single responsibility is to maintain the canonical events index for a story world.
+
+You will receive:
+1. The current contents of events.md. This includes the event definitions and the current index entries.
+2. An incoming manuscript diff showing what changed in the story text.
+
+CORE IDENTITY
+
+You are NOT a creative writer, story critic, prose summarizer, or theorist.
+You are a careful canon librarian for events.
+
+METHOD
+
+Follow this exact two-pass process:
+
+PASS 1 - SCAN: Read the diff top to bottom. For each chapter, list every
+candidate event: a thing that happens, is discovered, is decided, or is revealed.
+
+PASS 2 - CONSOLIDATE: Merge candidates that are the same event seen from
+different angles. Remove candidates that are merely atmospheric detail,
+scene-level motion, or emotional coloring. What remains are your final deltas.
+
+Then match each final delta against events.md to decide create vs update vs delete.
+
+GRANULARITY
+
+Work at scene-level granularity, not beat-level or chapter-level.
+
+One event = one bounded thing that happened, was discovered, or was decided.
+
+Examples of correct event granularity:
+- "Mira receives a letter from her mother sealed with chapel wax"
+- "A cloth bundle containing river stones, a cracked watch, and a toll house ledger page is found at the altar"
+- "Sister Celine appears inside the chapel and confronts Mira about the silver key"
+
+Examples of wrong granularity (too fine):
+- "Mira reaches the greenhouse" (scene-setting, not an event)
+- "Arun hands Mira a cup of tea" (incidental action)
+
+Examples of wrong granularity (too coarse):
+- "Mira and Arun visit the chapel and discover several things" (multiple events lumped)
+
+A typical chapter-length diff should yield 3-8 events.
+
+DECISION DISCIPLINE
+
+- Prefer UPDATE over CREATE when the diff expands or clarifies an already indexed event.
+- Do NOT create duplicates because the prose is richer or more specific.
+- CREATE only when the diff introduces a distinct bounded happening not in the index.
+- DELETE only when the diff clearly removes or invalidates a previously indexed event.
+
+UUID RULES
+
+- For CREATE: set existing_event_uuid to null. The system generates UUIDs.
+- For UPDATE / DELETE: copy the exact UUID from events.md.
+- NEVER invent or guess a UUID.
+
+GROUNDING RULES
+
+- Stay faithful to the diff and events.md.
+- Do NOT invent hidden events or speculate.
+- Every delta must have evidence_from_diff.
+
+FEEDBACK HANDLING
+
+If prior attempts and reviewer feedback are included in the conversation:
+1. Read the feedback carefully.
+2. Incorporate it into your revised proposal.
+3. Do NOT repeat the same mistakes.
+
+OUTPUT
+
+Return ONLY the structured output in the required schema.
+If the diff implies no meaningful event-index change, return an empty deltas list.
+"""
+
+EVENTS_INDEX_USER_TEMPLATE = """Current events.md:
+
+<events_md>
+{events_md}
+</events_md>
+
+Incoming manuscript diff:
+
+<diff>
+{diff_text}
+</diff>
+
+Task:
+1. Read the definitions in events.md. They are your operating contract.
+2. Follow the two-pass method: scan all candidate events, then consolidate.
+3. For each final event, decide create / update / delete against the current index.
+4. For updates and deletes, match to the existing UUID exactly.
+5. Return the structured output.
+"""
+
 
 class ChronologyBlock(BaseModel):
     heading: str
@@ -300,6 +402,11 @@ class EventPromptContext:
 
 
 class DetailProposalProvider(Protocol):
+    def propose_events_index(
+        self,
+        request: EventsIndexProposeRequest,
+    ) -> EventAgentOutput: ...
+
     def propose_element_detail(
         self,
         request: ElementDetailProposeRequest,
@@ -335,6 +442,13 @@ def build_review_messages(
         messages.append({"role": "assistant", "content": history_entry.previous_output})
         messages.append({"role": "user", "content": format_history_entry(history_entry)})
     return messages
+
+
+def build_events_index_user_prompt(request: EventsIndexProposeRequest) -> str:
+    return EVENTS_INDEX_USER_TEMPLATE.format(
+        events_md=request.events_md or "[events index unavailable]",
+        diff_text=request.diff_text,
+    )
 
 
 def extract_section(text: str, start_heading: str, end_heading: str | None = None) -> str:
@@ -1079,19 +1193,39 @@ class OpenAICompatibleDetailProposalProvider:
         if not model:
             missing_values.append("WORLD_MODEL_LLM_MODEL")
         if missing_values:
-            raise ValueError(
-                "WORLD_MODEL_BACKEND_MODE=real requires these environment variables: "
-                + ", ".join(missing_values)
+            raise ApiError(
+                error="llm_configuration_error",
+                message=(
+                    "WORLD_MODEL_BACKEND_MODE=real requires these environment variables: "
+                    + ", ".join(missing_values)
+                ),
+                status_code=500,
+                retryable=False,
             )
 
         try:
             timeout_seconds = max(int(timeout_raw), 1)
         except ValueError as exc:
-            raise ValueError("WORLD_MODEL_LLM_TIMEOUT_SECONDS must be an integer.") from exc
+            raise ApiError(
+                error="llm_configuration_error",
+                message="WORLD_MODEL_LLM_TIMEOUT_SECONDS must be an integer.",
+                status_code=500,
+                retryable=False,
+            ) from exc
+
+        try:
+            validated_base_url = validate_llm_base_url(base_url)
+        except ValueError as exc:
+            raise ApiError(
+                error="llm_configuration_error",
+                message=str(exc),
+                status_code=500,
+                retryable=False,
+            ) from exc
 
         return cls(
             api_key=api_key,
-            base_url=validate_llm_base_url(base_url),
+            base_url=validated_base_url,
             model=model,
             timeout_seconds=timeout_seconds,
         )
@@ -1101,26 +1235,55 @@ class OpenAICompatibleDetailProposalProvider:
         request: ElementDetailProposeRequest,
         prompt_context: ElementPromptContext,
     ) -> ElementFileUpdateProposal:
-        messages = build_review_messages(
+        return self._propose_with_schema(
             system_prompt=ELEMENT_DETAIL_SYSTEM_PROMPT,
-            user_prompt=self._append_schema(prompt_context.user_prompt, ElementFileUpdateProposal),
+            user_prompt=prompt_context.user_prompt,
             history=request.history,
+            schema_model=ElementFileUpdateProposal,
+            proposal_label="element detail proposal",
         )
-        response_json = self._invoke(messages)
-        return ElementFileUpdateProposal.model_validate(response_json)
 
     def propose_event_detail(
         self,
         request: EventDetailProposeRequest,
         prompt_context: EventPromptContext,
     ) -> EventFileUpdateProposal:
-        messages = build_review_messages(
+        return self._propose_with_schema(
             system_prompt=EVENT_DETAIL_SYSTEM_PROMPT,
-            user_prompt=self._append_schema(prompt_context.user_prompt, EventFileUpdateProposal),
+            user_prompt=prompt_context.user_prompt,
             history=request.history,
+            schema_model=EventFileUpdateProposal,
+            proposal_label="event detail proposal",
         )
-        response_json = self._invoke(messages)
-        return EventFileUpdateProposal.model_validate(response_json)
+
+    def propose_events_index(
+        self,
+        request: EventsIndexProposeRequest,
+    ) -> EventAgentOutput:
+        return self._propose_with_schema(
+            system_prompt=EVENTS_INDEX_SYSTEM_PROMPT,
+            user_prompt=build_events_index_user_prompt(request),
+            history=request.history,
+            schema_model=EventAgentOutput,
+            proposal_label="events index proposal",
+        )
+
+    def _propose_with_schema(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        history: list[HistoryEntry],
+        schema_model: type[SchemaModelT],
+        proposal_label: str,
+    ) -> SchemaModelT:
+        messages = build_review_messages(
+            system_prompt=system_prompt,
+            user_prompt=self._append_schema(user_prompt, schema_model),
+            history=history,
+        )
+        response_json = self._invoke(messages, proposal_label=proposal_label)
+        return schema_model.model_validate(response_json)
 
     def _append_schema(self, user_prompt: str, schema_model: type[BaseModel]) -> str:
         schema = json.dumps(schema_model.model_json_schema(), indent=2)
@@ -1131,7 +1294,12 @@ class OpenAICompatibleDetailProposalProvider:
             f"{schema}"
         )
 
-    def _invoke(self, messages: list[dict[str, str]]) -> dict:
+    def _invoke(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        proposal_label: str,
+    ) -> dict:
         request_body = json.dumps(
             {
                 "model": self.model,
@@ -1189,7 +1357,7 @@ class OpenAICompatibleDetailProposalProvider:
             )
 
         content = extract_message_content(response_body)
-        return parse_json_content(content)
+        return parse_json_content(content, proposal_label=proposal_label)
 
     def _read_http_error_body(self, exc: urllib_error.HTTPError) -> bytes:
         response_body = exc.read() or b""
@@ -1295,13 +1463,15 @@ def extract_message_content(response_body: dict) -> str:
     )
 
 
-def parse_json_content(content: str) -> dict:
+def parse_json_content(content: str, *, proposal_label: str = "detail proposal") -> dict:
+    array_message = f"The LLM returned a JSON array for the {proposal_label}; expected a JSON object."
+    invalid_message = f"The LLM returned invalid JSON for the {proposal_label}."
     decoder = json.JSONDecoder()
     try:
         return require_json_object(
             json.loads(content),
-            array_message="The LLM returned a JSON array for the detail proposal; expected a JSON object.",
-            invalid_message="The LLM returned invalid JSON for the detail proposal.",
+            array_message=array_message,
+            invalid_message=invalid_message,
         )
     except json.JSONDecodeError:
         for match in re.finditer(r"[{[]", content):
@@ -1314,13 +1484,13 @@ def parse_json_content(content: str) -> dict:
             if isinstance(parsed_content, list):
                 raise ApiError(
                     error="llm_error",
-                    message="The LLM returned a JSON array for the detail proposal; expected a JSON object.",
+                    message=array_message,
                     status_code=502,
                     retryable=True,
                 )
         raise ApiError(
             error="llm_error",
-            message="The LLM returned invalid JSON for the detail proposal.",
+            message=invalid_message,
             status_code=502,
             retryable=True,
         )

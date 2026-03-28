@@ -257,6 +257,27 @@ def test_validation_errors_use_the_shared_error_envelope() -> None:
     assert response_body["retryable"] is False
 
 
+def test_real_mode_missing_llm_configuration_uses_shared_error_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_harness_service.cache_clear()
+    monkeypatch.setenv("WORLD_MODEL_BACKEND_MODE", "real")
+    monkeypatch.delenv("WORLD_MODEL_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("WORLD_MODEL_LLM_MODEL", raising=False)
+    try:
+        client = build_client(raise_server_exceptions=False)
+        response = client.post("/harness/events-index/propose", json=build_events_index_propose_payload())
+        response_body = response.json()
+
+        assert response.status_code == 500
+        assert response_body["error"] == "llm_configuration_error"
+        assert response_body["retryable"] is False
+        assert "WORLD_MODEL_LLM_API_KEY" in response_body["message"]
+        assert "WORLD_MODEL_LLM_MODEL" in response_body["message"]
+    finally:
+        get_harness_service.cache_clear()
+
+
 def test_elements_index_propose_returns_parse_error_for_blank_uuid_entries() -> None:
     client = build_client()
     payload = build_elements_index_propose_payload()

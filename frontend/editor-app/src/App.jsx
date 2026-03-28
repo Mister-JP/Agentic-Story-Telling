@@ -58,6 +58,7 @@ import {
   updateFileContent,
 } from './utils/tree.js'
 import {
+  checkSyncBeforeDownload,
   exportProjectZip,
   importProjectZip,
   isProjectArchiveAbortError,
@@ -167,6 +168,7 @@ function App() {
   const [dialogAction, setDialogAction] = useState(null)
   const [dialogTargetId, setDialogTargetId] = useState(null)
   const [dialogDraftName, setDialogDraftName] = useState('')
+  const [dialogChangedFileCount, setDialogChangedFileCount] = useState(0)
   const [dialogError, setDialogError] = useState('')
   const [projectAction, setProjectAction] = useState(null)
   const [projectStatus, setProjectStatus] = useState(null)
@@ -249,6 +251,7 @@ function App() {
     setDialogAction(null)
     setDialogTargetId(null)
     setDialogDraftName('')
+    setDialogChangedFileCount(0)
     setDialogError('')
   }
 
@@ -284,6 +287,14 @@ function App() {
 
     setDialogDraftName(nextAction === 'newFile' ? 'untitled.story' : 'new-folder')
   }
+
+  const openDownloadWarningDialog = useCallback((changedFileCount) => {
+    setDialogAction('downloadWarning')
+    setDialogTargetId(null)
+    setDialogDraftName('')
+    setDialogChangedFileCount(changedFileCount)
+    setDialogError('')
+  }, [])
 
   const handleDialogDraftNameChange = (nextName) => {
     setDialogDraftName(nextName)
@@ -1164,7 +1175,7 @@ function App() {
     closeDialog()
   }
 
-  const handleDownloadProject = async () => {
+  const performProjectDownload = useCallback(async () => {
     if (projectAction) {
       return
     }
@@ -1194,6 +1205,32 @@ function App() {
     } finally {
       setProjectAction(null)
     }
+  }, [projectAction, selectedNodeId, syncState, workspace, worldModel])
+
+  const handleConfirmDownloadAnyway = async () => {
+    closeDialog()
+    await performProjectDownload()
+  }
+
+  const handleConfirmSyncFirst = () => {
+    closeDialog()
+    setViewMode('world')
+    handleStartWorldSync()
+  }
+
+  const handleDownloadProject = async () => {
+    if (projectAction) {
+      return
+    }
+
+    const downloadCheck = checkSyncBeforeDownload(syncState, workspace)
+
+    if (downloadCheck.needsWarning) {
+      openDownloadWarningDialog(downloadCheck.changedFileCount)
+      return
+    }
+
+    await performProjectDownload()
   }
 
   const handleUploadProject = async () => {
@@ -1303,13 +1340,18 @@ function App() {
       <WorkspaceDialog
         action={dialogAction}
         deleteStats={dialogDeleteStats}
+        downloadWarning={{
+          changedFileCount: dialogChangedFileCount,
+        }}
         draftName={dialogDraftName}
         error={dialogError}
         targetNode={dialogTargetNode}
         onClose={closeDialog}
         onConfirmCancelReview={handleConfirmCancelReview}
+        onConfirmDownloadAnyway={handleConfirmDownloadAnyway}
         onConfirmDelete={handleDeleteConfirm}
         onConfirmNewProject={handleNewProjectConfirm}
+        onConfirmSyncFirst={handleConfirmSyncFirst}
         onDraftNameChange={handleDialogDraftNameChange}
         onSubmit={handleDialogSubmit}
       />

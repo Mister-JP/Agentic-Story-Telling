@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -11,8 +12,10 @@ from backend.schemas import (
     ElementDetailProposeRequest,
     ElementFileUpdateProposal,
     ElementKind,
+    EventAgentOutput,
     EventDetailProposeRequest,
     EventFileUpdateProposal,
+    EventsIndexProposeRequest,
     HistoryEntry,
 )
 from backend.services.detail_review import (
@@ -36,6 +39,20 @@ from backend.services.detail_review import (
     validate_llm_base_url,
 )
 from urllib import error as urllib_error
+
+
+class FakeHTTPResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
 
 
 def test_merge_section_lines_adds_unique_and_dedupes_duplicate() -> None:
@@ -536,6 +553,83 @@ def test_provider_repr_masks_the_api_key() -> None:
 
     assert "top-secret" not in repr(provider)
     assert "api_key='***'" in repr(provider)
+
+
+def test_propose_events_index_posts_schema_and_history_via_mock_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAICompatibleDetailProposalProvider(
+        api_key="top-secret",
+        base_url="https://example.com/openai/v1",
+        model="test-model",
+    )
+    request = EventsIndexProposeRequest(
+        diff_text="+ Mira finds the cloth bundle at the altar.",
+        events_md="# Events\n\n## Entries\n- evt_old123 | June 27, 1998 | Chapter 7 | Mira enters the chapel\n",
+        history=[
+            HistoryEntry(
+                attempt_number=1,
+                previous_output='{"scan_summary":"Too broad","deltas":[]}',
+                reviewer_feedback="Split discovery from confrontation into separate events.",
+            )
+        ],
+    )
+    captured_body: dict[str, object] = {}
+
+    def fake_urlopen(http_request, timeout: int):
+        captured_body["timeout"] = timeout
+        captured_body["url"] = http_request.full_url
+        captured_body["json"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeHTTPResponse(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    EventAgentOutput(
+                                        scan_summary="The diff introduces one distinct altar discovery event.",
+                                        deltas=[
+                                            {
+                                                "action": "create",
+                                                "when": "June 28, 1998, dawn",
+                                                "chapters": "Chapter 8",
+                                                "summary": "Mira discovers a cloth bundle waiting at the altar",
+                                                "reason": "The diff adds a bounded discovery that is not yet indexed.",
+                                                "evidence_from_diff": [
+                                                    "Mira finds the cloth bundle at the altar."
+                                                ],
+                                            }
+                                        ],
+                                    ).model_dump()
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr("backend.services.detail_review.urllib_request.urlopen", fake_urlopen)
+
+    proposal = provider.propose_events_index(request)
+
+    assert proposal.scan_summary == "The diff introduces one distinct altar discovery event."
+    assert len(proposal.deltas) == 1
+    request_json = captured_body["json"]
+    assert isinstance(request_json, dict)
+    assert captured_body["timeout"] == 120
+    assert captured_body["url"] == "https://example.com/openai/v1/chat/completions"
+    assert request_json["model"] == "test-model"
+    assert request_json["temperature"] == 0
+    messages = request_json["messages"]
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert "Current events.md:" in messages[1]["content"]
+    assert "Return JSON only." in messages[1]["content"]
+    assert '"scan_summary"' in messages[1]["content"]
+    assert messages[2]["content"] == '{"scan_summary":"Too broad","deltas":[]}'
+    assert "Attempt 1" in messages[3]["content"]
+    assert "Split discovery from confrontation into separate events." in messages[3]["content"]
 
 
 @pytest.mark.parametrize("status_code", [401, 403])

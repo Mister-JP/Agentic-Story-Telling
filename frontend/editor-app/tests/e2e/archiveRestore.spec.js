@@ -31,7 +31,7 @@ function buildArchiveWorkspace() {
   }
 }
 
-function buildUnsyncedSyncState() {
+function buildSyncedSyncState() {
   return {
     status: 'synced',
     lastSyncedAt: '2026-03-25T12:00:00.000Z',
@@ -39,7 +39,7 @@ function buildUnsyncedSyncState() {
       'archive-file': {
         name: 'archive-restore.story',
         path: 'archive-scenes/archive-restore.story',
-        markdown: '# Restored Scene\n\nOld story content.',
+        markdown: '# Restored Scene\n\nMira returns to the chapel.',
       },
     },
   }
@@ -119,7 +119,7 @@ async function installArchivePickerStubs(page) {
 async function seedArchiveState(page) {
   const workspace = buildArchiveWorkspace()
   const worldModel = buildWorldModelFixture()
-  const syncState = buildUnsyncedSyncState()
+  const syncState = buildSyncedSyncState()
 
   await page.goto('/')
   await page.evaluate(
@@ -144,9 +144,18 @@ async function openProjectMenu(page) {
   await page.getByRole('button', { name: 'Project' }).click()
 }
 
-async function downloadProjectArchive(page) {
+async function downloadProjectArchive(page, { expectWarning = false } = {}) {
   await openProjectMenu(page)
   await page.getByRole('menuitem', { name: 'Download' }).click()
+
+  if (expectWarning) {
+    const warningDialog = page.getByRole('dialog', { name: 'World Model Out of Sync' })
+
+    await expect(warningDialog).toBeVisible()
+    await expect(warningDialog).toContainText('1 file has changed since the last sync.')
+    await warningDialog.getByRole('button', { name: 'Download Anyway' }).click()
+  }
+
   await page.waitForFunction(
     (captureKey) => sessionStorage.getItem(captureKey) !== null,
     ARCHIVE_CAPTURE_STORAGE_KEY,
@@ -172,16 +181,27 @@ async function switchToWorldMode(page) {
 
 async function expectRestoredFileSelection(page) {
   await expect(page.getByText('archive-restore.story', { exact: true })).toBeVisible()
-  await expect(page.locator('.ProseMirror')).toContainText('Mira returns to the chapel.')
+  await expect(page.locator('.ProseMirror')).toContainText('Mira returns to the chapel at dawn.')
 }
 
-test('downloaded v2 archive restores workspace, world model, and unsynced state', async ({ page }) => {
+async function editRestoredStory(page) {
+  await page.getByText('archive-restore.story', { exact: true }).click()
+  const editor = page.locator('.ProseMirror').first()
+
+  await editor.click()
+  await editor.fill('Mira returns to the chapel at dawn.')
+}
+
+test('editing after sync shows the download warning and preserves unsynced state after restore', async ({ page }) => {
   await installArchivePickerStubs(page)
   await seedArchiveState(page)
 
+  await expect(page.getByTestId('sync-status-badge')).toContainText('synced')
+
+  await editRestoredStory(page)
   await expect(page.getByTestId('sync-status-badge')).toContainText('1 unsynced')
 
-  await downloadProjectArchive(page)
+  await downloadProjectArchive(page, { expectWarning: true })
 
   await page.evaluate(() => localStorage.clear())
   await page.reload()

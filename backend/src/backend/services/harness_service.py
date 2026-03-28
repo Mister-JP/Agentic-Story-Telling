@@ -129,7 +129,7 @@ class RealHarnessService:
         return cls(detail_proposal_provider=OpenAICompatibleDetailProposalProvider.from_env())
 
     def propose_events_index(self, request: EventsIndexProposeRequest) -> EventsIndexProposeResponse:
-        proposal = build_stub_event_agent_output(request.diff_text)
+        proposal = self.detail_proposal_provider.propose_events_index(request)
         return EventsIndexProposeResponse(proposal=proposal)
 
     def apply_events_index(self, request: EventsIndexApplyRequest) -> EventsIndexApplyResponse:

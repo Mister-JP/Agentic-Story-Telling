@@ -12,6 +12,10 @@ function formatItemCount(count, label) {
   return `${count} ${label}${count === 1 ? '' : 's'}`
 }
 
+function formatChangedFileCopy(count) {
+  return `${count} file${count === 1 ? ' has' : 's have'} changed since the last sync.`
+}
+
 function getDialogTitle(action, targetNode) {
   if (action === 'newFile') {
     return 'Create file'
@@ -31,6 +35,10 @@ function getDialogTitle(action, targetNode) {
 
   if (action === 'cancelReview') {
     return 'Cancel world sync'
+  }
+
+  if (action === 'downloadWarning') {
+    return 'World Model Out of Sync'
   }
 
   if (targetNode?.type === 'folder') {
@@ -86,17 +94,23 @@ function getDeleteCopy(targetNode, deleteStats) {
 function WorkspaceDialog({
   action,
   deleteStats,
+  downloadWarning,
   draftName,
   error,
   onClose,
   onConfirmCancelReview,
+  onConfirmDownloadAnyway,
   onConfirmDelete,
   onConfirmNewProject,
+  onConfirmSyncFirst,
   onDraftNameChange,
   onSubmit,
   targetNode,
 }) {
-  const isConfirmationAction = action === 'delete' || action === 'newProject' || action === 'cancelReview'
+  const isConfirmationAction = action === 'delete'
+    || action === 'newProject'
+    || action === 'cancelReview'
+    || action === 'downloadWarning'
   const deleteCopy = action === 'delete' ? getDeleteCopy(targetNode, deleteStats) : null
 
   return (
@@ -119,6 +133,19 @@ function WorkspaceDialog({
               <Text fw={600}>Cancel the current world sync?</Text>
               <Text className="panel-meta">
                 This discards every staged index approval and detail review result, then returns to World mode with the existing world model unchanged.
+              </Text>
+            </Stack>
+          ) : action === 'downloadWarning' ? (
+            <Stack gap={6}>
+              <Text fw={600}>
+                Your world model hasn&apos;t been synced with recent story changes.
+              </Text>
+              <Text className="dialog-impact-chip">
+                {formatChangedFileCopy(downloadWarning?.changedFileCount ?? 0)}
+              </Text>
+              <Text className="panel-meta">
+                If you download now, the zip will include the current world model and a record
+                of unsynced changes, so you can sync after reloading.
               </Text>
             </Stack>
           ) : (
@@ -144,6 +171,15 @@ function WorkspaceDialog({
               <Button data-testid="confirm-cancel-review-button" onClick={onConfirmCancelReview}>
                 Cancel sync
               </Button>
+            ) : action === 'downloadWarning' ? (
+              <>
+                <Button data-testid="download-anyway-button" onClick={onConfirmDownloadAnyway} variant="default">
+                  Download Anyway
+                </Button>
+                <Button data-testid="sync-first-button" onClick={onConfirmSyncFirst}>
+                  Sync First
+                </Button>
+              </>
             ) : (
               <Button className="dialog-destructive-action" onClick={onConfirmDelete}>
                 {deleteCopy.confirmLabel}
@@ -196,12 +232,17 @@ WorkspaceDialog.propTypes = {
     folders: PropTypes.number.isRequired,
     total: PropTypes.number.isRequired,
   }),
+  downloadWarning: PropTypes.shape({
+    changedFileCount: PropTypes.number.isRequired,
+  }).isRequired,
   draftName: PropTypes.string.isRequired,
   error: PropTypes.string.isRequired,
   onClose: PropTypes.func.isRequired,
   onConfirmCancelReview: PropTypes.func.isRequired,
+  onConfirmDownloadAnyway: PropTypes.func.isRequired,
   onConfirmDelete: PropTypes.func.isRequired,
   onConfirmNewProject: PropTypes.func.isRequired,
+  onConfirmSyncFirst: PropTypes.func.isRequired,
   onDraftNameChange: PropTypes.func.isRequired,
   onSubmit: PropTypes.func.isRequired,
   targetNode: nodeShape,
