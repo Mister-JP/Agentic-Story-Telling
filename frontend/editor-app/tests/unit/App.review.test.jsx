@@ -397,6 +397,17 @@ describe('App review flow', () => {
     expect(revisedEventDetailRequest.history[0].previous_output).toContain('Initial event detail attempt.')
 
     await user.click(screen.getByTestId('approve-detail-button'))
+    await screen.findByTestId('sync-complete-step')
+
+    expect(screen.getByTestId('sync-complete-events-summary')).toHaveTextContent('1 created')
+    expect(screen.getByTestId('sync-complete-elements-summary')).toHaveTextContent('2 created')
+    expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('1 detail pages updated')
+    expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('1 detail pages skipped')
+    expect(screen.getByTestId('sync-complete-event-details-summary')).toHaveTextContent('1 detail pages updated')
+    expect(screen.getByTestId('project-status-message')).toHaveTextContent('World model updated from the review.')
+    expect(screen.queryByTestId('world-panel-stub')).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId('return-to-world-view-button'))
 
     await waitFor(() => {
       expect(screen.getByTestId('world-panel-stub')).toBeInTheDocument()
@@ -433,6 +444,112 @@ describe('App review flow', () => {
     const firstRequest = JSON.parse(fetch.mock.calls[0][1].body)
     expect(firstRequest.diff_text).toContain('story-structure/character-arc.story')
     expect(firstRequest.diff_text).not.toContain('story-structure/opening-scene.story')
+  })
+
+  it('shows the complete step immediately when no detail targets remain after the index passes', async () => {
+    const user = userEvent.setup()
+
+    fetch
+      .mockResolvedValueOnce(jsonResponse({
+        proposal: {
+          scan_summary: 'Delete the stale event.',
+          deltas: [
+            {
+              action: 'delete',
+              existing_event_uuid: 'evt_old123',
+              when: 'June 20, 1998',
+              chapters: 'Chapter 7',
+              summary: 'Old event',
+              reason: 'The diff removes this event from the story.',
+              evidence_from_diff: ['The old event reference was removed.'],
+            },
+          ],
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        actions: ['Deleted event evt_old123.'],
+        detail_files: {},
+        events_md: '# Events\n\n## Entries\n',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        proposal: {
+          diff_summary: 'No element changes are needed.',
+          rationale: 'The diff only removes an outdated event reference.',
+          identified_elements: [],
+          approval_message: 'No element actions required.',
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        actions: [],
+        detail_files: {},
+        elements_md: '# Elements\n\n## Entries\n',
+      }))
+
+    renderApp()
+
+    await startSyncToEventsIndex(user)
+    await user.click(screen.getByTestId('approve-events-index-button'))
+    await screen.findByTestId('elements-index-review')
+    await user.click(screen.getByTestId('approve-elements-index-button'))
+    await screen.findByTestId('sync-complete-step')
+
+    expect(screen.getByTestId('sync-complete-events-summary')).toHaveTextContent('1 deleted')
+    expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('0 detail pages updated')
+    expect(screen.queryByTestId('world-panel-stub')).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId('return-to-world-view-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('world-panel-stub')).toBeInTheDocument()
+    })
+  })
+
+  it('shows the complete step when the final detail target is skipped', async () => {
+    const user = userEvent.setup()
+
+    fetch
+      .mockResolvedValueOnce(jsonResponse({
+        proposal: buildEventProposal('Stub event'),
+      }))
+      .mockResolvedValueOnce(jsonResponse(buildEventsApplyResponse('Stub event')))
+      .mockResolvedValueOnce(jsonResponse({
+        proposal: {
+          diff_summary: 'No element changes are needed.',
+          rationale: 'Only the event detail requires review.',
+          identified_elements: [],
+          approval_message: 'No element actions required.',
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        actions: [],
+        detail_files: {},
+        elements_md: '# Elements\n\n## Entries\n',
+      }))
+      .mockResolvedValueOnce(jsonResponse(
+        buildEventDetailResponse(
+          '# Stub event\n\n## Core Understanding\nEvent detail ready for review.\n',
+          'Adds event detail context.',
+        ),
+      ))
+
+    renderApp()
+
+    await startSyncToEventsIndex(user)
+    await user.click(screen.getByTestId('approve-events-index-button'))
+    await screen.findByTestId('elements-index-review')
+    await user.click(screen.getByTestId('approve-elements-index-button'))
+    await screen.findByTestId('event-detail-review')
+    await user.click(screen.getByTestId('skip-detail-button'))
+    await screen.findByTestId('sync-complete-step')
+
+    expect(screen.getByTestId('sync-complete-event-details-summary')).toHaveTextContent('0 detail pages updated')
+    expect(screen.getByTestId('sync-complete-event-details-summary')).toHaveTextContent('1 detail pages skipped')
+
+    await user.click(screen.getByTestId('return-to-world-view-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('world-panel-stub')).toBeInTheDocument()
+    })
   })
 
   it('shows the no-change message during detail review when the backend returns changed=false', async () => {

@@ -3,6 +3,7 @@ import PropTypes from 'prop-types'
 import DetailReviewStep from './DetailReviewStep.jsx'
 import DiffPreviewStep from './DiffPreviewStep.jsx'
 import IndexReviewStep from './IndexReviewStep.jsx'
+import SyncCompleteStep from './SyncCompleteStep.jsx'
 import {
   DETAIL_REVIEW_STEP_VALUES,
   INDEX_REVIEW_STEP_VALUES,
@@ -84,6 +85,7 @@ ReviewErrorState.propTypes = {
 
 function SyncReviewPanel({
   onApprove,
+  onComplete,
   onContinue,
   onRequestChanges,
   onSelectionChange,
@@ -93,6 +95,10 @@ function SyncReviewPanel({
 }) {
   if (!reviewSession) {
     return null
+  }
+
+  if (reviewSession.step === REVIEW_STEPS.COMPLETE) {
+    return <SyncCompleteStep onComplete={onComplete} reviewSession={reviewSession} />
   }
 
   if (reviewSession.step === REVIEW_STEPS.DIFF_PREVIEW) {
@@ -158,6 +164,7 @@ function SyncReviewPanel({
 
 SyncReviewPanel.propTypes = {
   onApprove: PropTypes.func.isRequired,
+  onComplete: PropTypes.func.isRequired,
   onContinue: PropTypes.func.isRequired,
   onRequestChanges: PropTypes.func.isRequired,
   onSelectionChange: PropTypes.func.isRequired,
@@ -166,6 +173,7 @@ SyncReviewPanel.propTypes = {
   reviewSession: PropTypes.shape({
     attemptNumber: PropTypes.number,
     changedFiles: PropTypes.array,
+    completedSyncAt: PropTypes.string,
     currentDetailIndex: PropTypes.number,
     currentPreviewDiff: PropTypes.string,
     currentProposal: PropTypes.object,

@@ -558,13 +558,41 @@ function App() {
     }
   }, [])
 
-  const handleDiscardReview = useCallback(() => {
+  const exitReviewMode = useCallback(() => {
     reviewGenerationRef.current += 1
     reviewActionLockRef.current = null
     setIsWorldSyncLoading(false)
     setReviewSession(null)
     setViewMode('world')
   }, [])
+
+  const showCompletedReviewScreen = useCallback((completedSession, appliedReview) => {
+    setWorldModel(appliedReview.worldModel)
+    setSyncState(appliedReview.syncState)
+    setProjectStatus({
+      kind: 'success',
+      message: 'World model updated from the review.',
+    })
+    setReviewSession({
+      ...completedSession,
+      completedSyncAt: appliedReview.syncState.lastSyncedAt,
+      currentPreviewDiff: '',
+      currentProposal: null,
+      currentUpdatedDetailMd: '',
+      error: null,
+      isLoading: false,
+      loadingAction: null,
+      step: REVIEW_STEPS.COMPLETE,
+    })
+  }, [setSyncState, setWorldModel])
+
+  const handleDiscardReview = useCallback(() => {
+    exitReviewMode()
+  }, [exitReviewMode])
+
+  const handleCompleteReview = useCallback(() => {
+    exitReviewMode()
+  }, [exitReviewMode])
 
   const handleRequestDiscardReview = useCallback(() => {
     const activeReviewSession = reviewSessionRef.current
@@ -863,14 +891,7 @@ function App() {
             workspace: workspaceRef.current,
           })
 
-          setWorldModel(appliedReview.worldModel)
-          setSyncState(appliedReview.syncState)
-          setProjectStatus({
-            kind: 'success',
-            message: 'World model updated from the review.',
-          })
-          setReviewSession(null)
-          setViewMode('world')
+          showCompletedReviewScreen(baseSession, appliedReview)
           return
         }
 
@@ -951,14 +972,7 @@ function App() {
           return
         }
 
-        setWorldModel(appliedReview.worldModel)
-        setSyncState(appliedReview.syncState)
-        setProjectStatus({
-          kind: 'success',
-          message: 'World model updated from the review.',
-        })
-        setReviewSession(null)
-        setViewMode('world')
+        showCompletedReviewScreen(nextDetailReview.session, appliedReview)
         return
       }
 
@@ -1001,8 +1015,7 @@ function App() {
     buildNextDetailReviewSession,
     releaseReviewAction,
     requestReviewProposalForSession,
-    setSyncState,
-    setWorldModel,
+    showCompletedReviewScreen,
     tryLockReviewAction,
   ])
 
@@ -1058,14 +1071,7 @@ function App() {
           return
         }
 
-        setWorldModel(appliedReview.worldModel)
-        setSyncState(appliedReview.syncState)
-        setProjectStatus({
-          kind: 'success',
-          message: 'World model updated from the review.',
-        })
-        setReviewSession(null)
-        setViewMode('world')
+        showCompletedReviewScreen(nextDetailReview.session, appliedReview)
         return
       }
 
@@ -1108,8 +1114,7 @@ function App() {
     buildNextDetailReviewSession,
     releaseReviewAction,
     requestReviewProposalForSession,
-    setSyncState,
-    setWorldModel,
+    showCompletedReviewScreen,
     tryLockReviewAction,
   ])
 
@@ -1283,6 +1288,7 @@ function App() {
           {viewMode === 'review' ? (
             <SyncReviewPanel
               onApprove={handleApproveReview}
+              onComplete={handleCompleteReview}
               onContinue={handleContinueWorldSync}
               onRequestChanges={handleRequestReviewChanges}
               onSelectionChange={handleReviewSelectionChange}

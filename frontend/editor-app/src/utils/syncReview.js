@@ -416,12 +416,105 @@ export function buildCurrentDetailMarkdown(reviewSession, worldModel) {
 }
 
 export function countCompletedDetailTargets(reviewSession, step) {
-  const targets = step === REVIEW_STEPS.ELEMENT_DETAILS
+  const targetType = step === REVIEW_STEPS.ELEMENT_DETAILS ? 'element' : 'event'
+  return summarizeDetailResults(reviewSession, targetType).approvedCount
+}
+
+export function countResolvedDetailTargets(reviewSession, step) {
+  const targetType = step === REVIEW_STEPS.ELEMENT_DETAILS ? 'element' : 'event'
+  const summary = summarizeDetailResults(reviewSession, targetType)
+
+  return summary.approvedCount + summary.skippedCount
+}
+
+function buildIndexActionSummary(actions, entityType) {
+  const summary = {
+    createdCount: 0,
+    deletedCount: 0,
+    updatedCount: 0,
+  }
+
+  for (const action of actions ?? []) {
+    const normalizedAction = action.trim().toLowerCase()
+
+    if (normalizedAction.startsWith(`created ${entityType} `)) {
+      summary.createdCount += 1
+      continue
+    }
+
+    if (normalizedAction.startsWith(`updated ${entityType} `)) {
+      summary.updatedCount += 1
+      continue
+    }
+
+    if (normalizedAction.startsWith(`deleted ${entityType} `)) {
+      summary.deletedCount += 1
+    }
+  }
+
+  return summary
+}
+
+function getTargetUuids(reviewSession, targetType) {
+  const targets = targetType === 'element'
     ? reviewSession?.elementDetailTargets ?? []
     : reviewSession?.eventDetailTargets ?? []
-  const results = reviewSession?.detailResults ?? {}
 
-  return targets.filter((target) => results[target.uuid]?.action === 'approved').length
+  return new Set(targets.map((target) => target.uuid))
+}
+
+function matchesDetailTargetType(uuid, result, targetType, targetUuids) {
+  if (result?.targetType === targetType) {
+    return true
+  }
+
+  if (targetUuids.has(uuid)) {
+    return true
+  }
+
+  return targetType === 'element'
+    ? uuid.startsWith('elt_')
+    : uuid.startsWith('evt_')
+}
+
+export function summarizeDetailResults(reviewSession, targetType) {
+  const targetUuids = getTargetUuids(reviewSession, targetType)
+  const summary = {
+    approvedCount: 0,
+    skippedCount: 0,
+    totalCount: targetUuids.size,
+  }
+
+  for (const [uuid, result] of Object.entries(reviewSession?.detailResults ?? {})) {
+    if (!matchesDetailTargetType(uuid, result, targetType, targetUuids)) {
+      continue
+    }
+
+    if (result.action === 'approved') {
+      summary.approvedCount += 1
+      continue
+    }
+
+    if (result.action === 'skipped') {
+      summary.skippedCount += 1
+    }
+  }
+
+  summary.totalCount = Math.max(
+    summary.totalCount,
+    summary.approvedCount + summary.skippedCount,
+  )
+
+  return summary
+}
+
+export function buildSyncReviewSummary(reviewSession) {
+  return {
+    elementDetails: summarizeDetailResults(reviewSession, 'element'),
+    elements: buildIndexActionSummary(reviewSession?.updatedElementsState?.actions ?? [], 'element'),
+    eventDetails: summarizeDetailResults(reviewSession, 'event'),
+    events: buildIndexActionSummary(reviewSession?.updatedEventsState?.actions ?? [], 'event'),
+  }
 }
 
 export function applyStagedIndexReviewResult({

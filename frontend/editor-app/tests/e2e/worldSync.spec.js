@@ -310,8 +310,15 @@ test('runs the detail review loop with approve, skip, and reject-then-approve be
   await expect(page.getByTestId('review-attempt-indicator')).toContainText('Attempt 2')
   await page.getByTestId('approve-detail-button').click()
 
-  await expect(page.getByTestId('world-sidebar')).toBeVisible()
+  await expect(page.getByTestId('sync-complete-step')).toBeVisible()
+  await expect(page.getByTestId('sync-complete-events-summary')).toContainText('1 created')
+  await expect(page.getByTestId('sync-complete-elements-summary')).toContainText('2 created')
+  await expect(page.getByTestId('sync-complete-element-details-summary')).toContainText('1 detail pages updated')
+  await expect(page.getByTestId('sync-complete-element-details-summary')).toContainText('1 detail pages skipped')
+  await expect(page.getByTestId('sync-complete-event-details-summary')).toContainText('1 detail pages updated')
   await expect(page.getByTestId('project-status-message')).toContainText('World model updated from the review.')
+  await page.getByTestId('return-to-world-view-button').click()
+  await expect(page.getByTestId('world-sidebar')).toBeVisible()
   await expect(page.getByTestId('world-sidebar').getByText('Cloth Bundle')).toBeVisible()
   await expect(page.getByTestId('world-sidebar').getByText('Lantern')).toBeVisible()
 

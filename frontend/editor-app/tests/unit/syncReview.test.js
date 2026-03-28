@@ -6,6 +6,7 @@ import {
   applyCompletedSyncReviewResult,
   applyStagedIndexReviewResult,
   beginIndexReviewSession,
+  buildSyncReviewSummary,
   buildElementDetailTargets,
   buildEventDetailTargets,
   countCompletedDetailTargets,
@@ -427,6 +428,59 @@ describe('syncReview helpers', () => {
         { uuid: 'elt_skipped456' },
       ],
     }, 'element-details')).toBe(1)
+  })
+
+  it('builds sync summary counts from index actions and detailResults', () => {
+    expect(buildSyncReviewSummary({
+      detailResults: {
+        elt_stub123: { action: 'approved', updatedMd: '# Approved detail' },
+        detail_custom_elt: { action: 'skipped', targetType: 'element' },
+        evt_stub123: { action: 'skipped' },
+        detail_custom_evt: { action: 'approved', targetType: 'event', updatedMd: '# Approved event detail' },
+      },
+      elementDetailTargets: [
+        { uuid: 'elt_stub123' },
+        { uuid: 'detail_custom_elt' },
+      ],
+      eventDetailTargets: [
+        { uuid: 'evt_stub123' },
+        { uuid: 'detail_custom_evt' },
+      ],
+      updatedEventsState: {
+        actions: [
+          'Created event evt_stub123: Chapel arrival.',
+          'Updated event evt_existing456: Procession begins.',
+          'Deleted event evt_old789.',
+        ],
+      },
+      updatedElementsState: {
+        actions: [
+          'Created element elt_stub123: Cloth Bundle (item).',
+          'Updated element elt_existing456: Mira — merged aliases.',
+        ],
+      },
+    })).toEqual({
+      elementDetails: {
+        approvedCount: 1,
+        skippedCount: 1,
+        totalCount: 2,
+      },
+      elements: {
+        createdCount: 1,
+        deletedCount: 0,
+        updatedCount: 1,
+      },
+      eventDetails: {
+        approvedCount: 1,
+        skippedCount: 1,
+        totalCount: 2,
+      },
+      events: {
+        createdCount: 1,
+        deletedCount: 1,
+        updatedCount: 1,
+      },
+    })
   })
 
   it('routes approved detail markdown by explicit target type instead of UUID prefixes', () => {

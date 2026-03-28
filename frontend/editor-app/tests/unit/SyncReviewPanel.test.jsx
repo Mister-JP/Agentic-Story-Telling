@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MantineProvider } from '@mantine/core'
 import { describe, expect, it, vi } from 'vitest'
 import SyncReviewPanel from '../../src/components/SyncReviewPanel.jsx'
@@ -8,6 +9,7 @@ function renderPanel(reviewSession, handlers = {}) {
     <MantineProvider>
       <SyncReviewPanel
         onApprove={vi.fn()}
+        onComplete={vi.fn()}
         onContinue={vi.fn()}
         onRequestChanges={vi.fn()}
         onSelectionChange={vi.fn()}
@@ -277,28 +279,45 @@ describe('SyncReviewPanel', () => {
     expect(screen.queryByTestId('detail-no-change-message')).not.toBeInTheDocument()
   })
 
-  it.each(['complete'])(
-    'renders nothing for non-review-panel step %s',
-    (step) => {
-      renderPanel({
-        attemptNumber: 2,
-        currentProposal: {
-          diff_summary: 'Deterministic summary',
-          scan_summary: 'Event summary',
-          deltas: [],
-          identified_elements: [],
-          rationale: 'Deterministic rationale',
-        },
-        error: 'Should stay hidden',
-        isLoading: true,
-        loadingAction: 'proposal',
-        step,
-      })
+  it('renders the sync-complete summary and returns through onComplete', async () => {
+    const user = userEvent.setup()
+    const onComplete = vi.fn()
 
-      expect(screen.queryByTestId('review-loading-state')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('review-error-state')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('events-index-review')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('elements-index-review')).not.toBeInTheDocument()
-    },
-  )
+    renderPanel({
+      completedSyncAt: '2026-03-25T14:30:00.000Z',
+      detailResults: {
+        elt_bundle123: { action: 'approved', updatedMd: '# Approved cloth bundle detail' },
+        elt_lantern456: { action: 'skipped' },
+        evt_stub123: { action: 'approved', updatedMd: '# Approved event detail' },
+      },
+      elementDetailTargets: [
+        { uuid: 'elt_bundle123' },
+        { uuid: 'elt_lantern456' },
+      ],
+      eventDetailTargets: [
+        { uuid: 'evt_stub123' },
+      ],
+      step: 'complete',
+      updatedElementsState: {
+        actions: [
+          'Created element elt_bundle123: Cloth Bundle (item).',
+          'Updated element elt_lantern456: Lantern.',
+        ],
+      },
+      updatedEventsState: {
+        actions: [
+          'Created event evt_stub123: Chapel arrival.',
+        ],
+      },
+    }, { onComplete })
+
+    expect(screen.getByTestId('sync-complete-step')).toBeInTheDocument()
+    expect(screen.getByTestId('sync-complete-elements-summary')).toHaveTextContent('1 created')
+    expect(screen.getByTestId('sync-complete-elements-summary')).toHaveTextContent('1 updated')
+    expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('1 detail pages updated')
+    expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('1 detail pages skipped')
+
+    await user.click(screen.getByTestId('return-to-world-view-button'))
+    expect(onComplete).toHaveBeenCalledTimes(1)
+  })
 })

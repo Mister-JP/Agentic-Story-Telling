@@ -6,7 +6,7 @@ import {
   getReviewStepStatus,
   getReviewStepperActive,
 } from '../utils/reviewSteps.js'
-import { countCompletedDetailTargets } from '../utils/syncReview.js'
+import { countResolvedDetailTargets } from '../utils/syncReview.js'
 
 function buildChangedFilesLabel(changedFiles) {
   const fileCount = changedFiles.length
@@ -55,13 +55,14 @@ function buildAttemptLabel(reviewSession) {
 }
 
 function SyncReviewSidebar({ onDiscard, reviewSession }) {
+  const isCompleteStep = reviewSession.step === REVIEW_STEPS.COMPLETE
   const diffPreviewStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.DIFF_PREVIEW)
   const eventsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
   const elementsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
   const elementDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENT_DETAILS)
   const eventDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENT_DETAILS)
-  const completedElementDetails = countCompletedDetailTargets(reviewSession, REVIEW_STEPS.ELEMENT_DETAILS)
-  const completedEventDetails = countCompletedDetailTargets(reviewSession, REVIEW_STEPS.EVENT_DETAILS)
+  const completedElementDetails = countResolvedDetailTargets(reviewSession, REVIEW_STEPS.ELEMENT_DETAILS)
+  const completedEventDetails = countResolvedDetailTargets(reviewSession, REVIEW_STEPS.EVENT_DETAILS)
   const totalElementDetails = reviewSession.elementDetailTargets?.length ?? 0
   const totalEventDetails = reviewSession.eventDetailTargets?.length ?? 0
 
@@ -115,21 +116,25 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
         </Stepper>
 
         <Box className="review-sidebar-note">
-          <Text className="review-sidebar-note-title">All-or-nothing sync</Text>
+          <Text className="review-sidebar-note-title">{isCompleteStep ? 'Sync applied' : 'All-or-nothing sync'}</Text>
           <Text className="review-sidebar-note-copy">
-            Canceling exits review mode, discards staged results, and leaves the current world model untouched.
+            {isCompleteStep
+              ? 'The review results are now committed. Return to world view from the summary panel to browse the updated model.'
+              : 'Canceling exits review mode, discards staged results, and leaves the current world model untouched.'}
           </Text>
         </Box>
       </Stack>
 
-      <Button
-        data-testid="discard-review-button"
-        disabled={reviewSession.isLoading}
-        onClick={onDiscard}
-        variant="default"
-      >
-        Cancel Sync
-      </Button>
+      {!isCompleteStep ? (
+        <Button
+          data-testid="discard-review-button"
+          disabled={reviewSession.isLoading}
+          onClick={onDiscard}
+          variant="default"
+        >
+          Cancel Sync
+        </Button>
+      ) : null}
     </Stack>
   )
 }

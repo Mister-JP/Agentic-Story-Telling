@@ -133,4 +133,20 @@ describe('SyncReviewSidebar', () => {
       }
     },
   )
+
+  it('hides cancel sync once the review reaches the complete step', () => {
+    renderSidebar({
+      attemptNumber: 2,
+      changedFiles: [{ fileId: 'chapter-08' }],
+      detailResults: {},
+      elementDetailTargets: [],
+      eventDetailTargets: [],
+      isLoading: false,
+      selectedFileIds: ['chapter-08'],
+      step: 'complete',
+    })
+
+    expect(screen.queryByTestId('discard-review-button')).not.toBeInTheDocument()
+    expect(screen.getByText('Sync applied')).toBeInTheDocument()
+  })
 })
