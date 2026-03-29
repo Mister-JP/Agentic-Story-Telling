@@ -134,7 +134,10 @@ describe('SyncReviewSidebar', () => {
     },
   )
 
-  it('hides cancel sync once the review reaches the complete step', () => {
+  it.each([
+    ['final-review', 'Ready to commit'],
+    ['complete', 'Sync applied'],
+  ])('hides cancel sync once the review reaches the %s step', (step, noteTitle) => {
     renderSidebar({
       attemptNumber: 2,
       changedFiles: [{ fileId: 'chapter-08' }],
@@ -143,10 +146,10 @@ describe('SyncReviewSidebar', () => {
       eventDetailTargets: [],
       isLoading: false,
       selectedFileIds: ['chapter-08'],
-      step: 'complete',
+      step,
     })
 
     expect(screen.queryByTestId('discard-review-button')).not.toBeInTheDocument()
-    expect(screen.getByText('Sync applied')).toBeInTheDocument()
+    expect(screen.getByText(noteTitle)).toBeInTheDocument()
   })
 })

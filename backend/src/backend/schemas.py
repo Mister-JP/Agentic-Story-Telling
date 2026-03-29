@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, model_valida
 
 def sanitize_required_text(value: Any) -> str:
     if not isinstance(value, str):
-        raise TypeError("Value must be a string.")
+        raise ValueError("Value must be a string.")
 
     sanitized_value = value.strip()
     if sanitized_value == "":
@@ -21,7 +21,7 @@ def sanitize_text(value: Any) -> str:
         return ""
 
     if not isinstance(value, str):
-        raise TypeError("Value must be a string.")
+        raise ValueError("Value must be a string.")
     return value.strip()
 
 
@@ -40,7 +40,7 @@ def sanitize_text_list(value: Any) -> list[str]:
         return []
 
     if not isinstance(value, list):
-        raise TypeError("Value must be a list.")
+        raise ValueError("Value must be a list.")
 
     sanitized_items: list[str] = []
     for item in value:
@@ -80,6 +80,7 @@ class EventDelta(ContractModel):
     summary: Text = ""
     reason: RequiredText
     evidence_from_diff: TextList = Field(default_factory=list)
+    provenance_summary: Text = ""
 
     @model_validator(mode="after")
     def validate_shape(self) -> "EventDelta":
@@ -103,6 +104,12 @@ class EventAgentOutput(ContractModel):
     deltas: list[EventDelta] = Field(default_factory=list)
 
 
+class ElementProposalAction(str, Enum):
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+
+
 class ElementKind(str, Enum):
     PERSON = "person"
     PLACE = "place"
@@ -118,6 +125,7 @@ class ElementKind(str, Enum):
 
 
 class ElementDecision(ContractModel):
+    action: ElementProposalAction
     display_name: RequiredText
     kind: ElementKind
     aliases: TextList = Field(default_factory=list)
@@ -125,9 +133,50 @@ class ElementDecision(ContractModel):
     snapshot: RequiredText
     update_instruction: RequiredText
     evidence_from_diff: TextList = Field(default_factory=list)
+    provenance_summary: Text = ""
     matched_existing_display_name: OptionalText = None
     matched_existing_uuid: OptionalText = None
-    is_new: bool
+    is_new: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+
+        if "action" not in value:
+            if value.get("is_new") is True:
+                value["action"] = ElementProposalAction.CREATE.value
+            elif value.get("is_new") is False:
+                value["action"] = ElementProposalAction.UPDATE.value
+            elif value.get("matched_existing_uuid"):
+                value["action"] = ElementProposalAction.UPDATE.value
+            elif value.get("matched_existing_display_name"):
+                value["action"] = ElementProposalAction.UPDATE.value
+            else:
+                # Default ambiguous legacy shapes to create so downstream apply can still
+                # resolve them against an existing canonical element by name or alias.
+                value["action"] = ElementProposalAction.CREATE.value
+
+        if "is_new" not in value and value.get("action") is not None:
+            value["is_new"] = value["action"] == ElementProposalAction.CREATE.value
+
+        return value
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "ElementDecision":
+        if self.action == ElementProposalAction.CREATE and self.matched_existing_uuid is not None:
+            raise ValueError("matched_existing_uuid must be null for create.")
+
+        if self.action == ElementProposalAction.DELETE and self.matched_existing_uuid is None:
+            raise ValueError(f"matched_existing_uuid is required for {self.action.value}.")
+
+        if self.is_new is None:
+            self.is_new = self.action == ElementProposalAction.CREATE
+        elif self.is_new != (self.action == ElementProposalAction.CREATE):
+            raise ValueError("is_new must match action.")
+
+        return self
 
 
 class ElementsProposal(ContractModel):
@@ -143,6 +192,7 @@ class DetailTarget(ContractModel):
     file: RequiredText
     delta_action: RequiredText
     update_context: RequiredText
+    provenance_summary: Text = ""
     kind: ElementKind | None = None
 
 
@@ -151,9 +201,17 @@ class ChronologyBlockUpdate(ContractModel):
     entries: TextList = Field(default_factory=list)
 
 
+class DetailFileAction(str, Enum):
+    NO_CHANGE = "no_change"
+    UPDATE = "update"
+    DELETE = "delete"
+
+
 class ElementFileUpdateProposal(ContractModel):
-    changed: bool
+    file_action: DetailFileAction
+    changed: bool | None = None
     rationale: RequiredText
+    retention_reason: OptionalText = None
     core_understanding_replacement: OptionalText = None
     stable_profile_to_add: TextList = Field(default_factory=list)
     stable_profile_to_remove: TextList = Field(default_factory=list)
@@ -162,14 +220,34 @@ class ElementFileUpdateProposal(ContractModel):
     knowledge_to_add: TextList = Field(default_factory=list)
     knowledge_to_remove: TextList = Field(default_factory=list)
     chronology_blocks_to_add: list[ChronologyBlockUpdate] = Field(default_factory=list)
+    chronology_blocks_to_remove: list[ChronologyBlockUpdate] = Field(default_factory=list)
     open_threads_to_add: TextList = Field(default_factory=list)
     open_threads_to_remove: TextList = Field(default_factory=list)
+    provenance_replacement: TextList = Field(default_factory=list)
     approval_message: RequiredText
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if "file_action" not in value:
+            changed = bool(value.get("changed"))
+            value["file_action"] = DetailFileAction.UPDATE.value if changed else DetailFileAction.NO_CHANGE.value
+        return value
+
+    @model_validator(mode="after")
+    def normalize_changed_flag(self) -> "ElementFileUpdateProposal":
+        if self.changed is None:
+            self.changed = self.file_action != DetailFileAction.NO_CHANGE
+        return self
 
 
 class EventFileUpdateProposal(ContractModel):
-    changed: bool
+    file_action: DetailFileAction
+    changed: bool | None = None
     rationale: RequiredText
+    retention_reason: OptionalText = None
     core_understanding_replacement: OptionalText = None
     causal_context_to_add: TextList = Field(default_factory=list)
     causal_context_to_remove: TextList = Field(default_factory=list)
@@ -181,12 +259,30 @@ class EventFileUpdateProposal(ContractModel):
     evidence_to_remove: TextList = Field(default_factory=list)
     open_threads_to_add: TextList = Field(default_factory=list)
     open_threads_to_remove: TextList = Field(default_factory=list)
+    provenance_replacement: TextList = Field(default_factory=list)
     approval_message: RequiredText
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if "file_action" not in value:
+            changed = bool(value.get("changed"))
+            value["file_action"] = DetailFileAction.UPDATE.value if changed else DetailFileAction.NO_CHANGE.value
+        return value
+
+    @model_validator(mode="after")
+    def normalize_changed_flag(self) -> "EventFileUpdateProposal":
+        if self.changed is None:
+            self.changed = self.file_action != DetailFileAction.NO_CHANGE
+        return self
 
 
 class EventsIndexProposeRequest(ContractModel):
     diff_text: RequiredText
     events_md: Text
+    current_detail_files: dict[str, str] = Field(default_factory=dict)
     history: list[HistoryEntry] = Field(default_factory=list)
 
 
@@ -195,19 +291,23 @@ class EventsIndexProposeResponse(ContractModel):
 
 
 class EventsIndexApplyRequest(ContractModel):
+    diff_text: RequiredText
     events_md: Text
+    current_detail_files: dict[str, str] = Field(default_factory=dict)
     proposal: EventAgentOutput
 
 
 class EventsIndexApplyResponse(ContractModel):
     events_md: Text
     detail_files: dict[str, str] = Field(default_factory=dict)
+    detail_targets: list[DetailTarget] = Field(default_factory=list)
     actions: TextList = Field(default_factory=list)
 
 
 class ElementsIndexProposeRequest(ContractModel):
     diff_text: RequiredText
     elements_md: Text
+    current_detail_files: dict[str, str] = Field(default_factory=dict)
     history: list[HistoryEntry] = Field(default_factory=list)
 
 
@@ -216,13 +316,16 @@ class ElementsIndexProposeResponse(ContractModel):
 
 
 class ElementsIndexApplyRequest(ContractModel):
+    diff_text: RequiredText
     elements_md: Text
+    current_detail_files: dict[str, str] = Field(default_factory=dict)
     proposal: ElementsProposal
 
 
 class ElementsIndexApplyResponse(ContractModel):
     elements_md: Text
     detail_files: dict[str, str] = Field(default_factory=dict)
+    detail_targets: list[DetailTarget] = Field(default_factory=list)
     actions: TextList = Field(default_factory=list)
 
 
@@ -260,3 +363,34 @@ class ErrorResponse(ContractModel):
     message: RequiredText
     retryable: bool
     details: Any | None = None
+
+
+class BackendMode(str, Enum):
+    STUB = "stub"
+    REAL = "real"
+
+
+class LlmProvider(str, Enum):
+    GROQ = "groq"
+    GEMINI = "gemini"
+    CUSTOM = "custom"
+
+
+class LlmSettingsResponse(ContractModel):
+    backend_mode: BackendMode
+    provider: LlmProvider
+    model: Text = ""
+    base_url: Text = ""
+    timeout_seconds: int = Field(ge=1)
+    max_tokens: int = Field(ge=1)
+    has_api_key: bool
+
+
+class LlmSettingsUpdateRequest(ContractModel):
+    backend_mode: BackendMode
+    provider: LlmProvider
+    api_key: OptionalText = None
+    model: Text = ""
+    base_url: Text = ""
+    timeout_seconds: int = Field(ge=1)
+    max_tokens: int = Field(ge=1)

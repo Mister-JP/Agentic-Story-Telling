@@ -73,6 +73,15 @@ function buildEventsApplyResponse(summary) {
 Original event stub detail.
 `,
     },
+    detail_targets: [
+      {
+        uuid: 'evt_stub123',
+        summary,
+        file: 'events/evt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the event dossier.',
+      },
+    ],
     events_md: `# Events
 
 ## Entries
@@ -113,6 +122,24 @@ Original cloth bundle stub detail.
 Original lantern stub detail.
 `,
     },
+    detail_targets: [
+      {
+        uuid: 'elt_bundle123',
+        summary: 'Cloth Bundle',
+        file: 'elements/elt_bundle123.md',
+        delta_action: 'create',
+        update_context: 'Create the cloth bundle dossier.',
+        kind: 'item',
+      },
+      {
+        uuid: 'elt_lantern456',
+        summary: 'Lantern',
+        file: 'elements/elt_lantern456.md',
+        delta_action: 'create',
+        update_context: 'Create the lantern dossier.',
+        kind: 'item',
+      },
+    ],
     elements_md: `# Elements
 
 ## Entries
@@ -125,7 +152,7 @@ Original lantern stub detail.
 function buildElementDetailResponse(uuid, summary, detailText) {
   return {
     proposal: {
-      changed: true,
+      file_action: 'update',
       rationale: `Refines the ${summary} file.`,
       approval_message: `Ready to apply ${summary}.`,
     },
@@ -137,7 +164,7 @@ function buildElementDetailResponse(uuid, summary, detailText) {
 function buildEventDetailResponse(detailText, rationale = 'Adds precise causal context.') {
   return {
     proposal: {
-      changed: true,
+      file_action: 'update',
       rationale,
       approval_message: 'Ready to apply the event detail.',
     },
@@ -310,6 +337,11 @@ test('runs the detail review loop with approve, skip, and reject-then-approve be
   await expect(page.getByTestId('review-attempt-indicator')).toContainText('Attempt 2')
   await page.getByTestId('approve-detail-button').click()
 
+  await expect(page.getByTestId('final-review-step')).toBeVisible()
+  await expect(page.getByTestId('discard-review-button')).toHaveCount(0)
+  await expect(page.getByTestId('final-review-detail-updates')).toContainText('elements/elt_bundle123.md')
+  await expect(page.getByTestId('final-review-detail-updates')).toContainText('events/evt_stub123.md')
+  await page.getByTestId('commit-final-review-button').click()
   await expect(page.getByTestId('sync-complete-step')).toBeVisible()
   await expect(page.getByTestId('sync-complete-events-summary')).toContainText('1 created')
   await expect(page.getByTestId('sync-complete-elements-summary')).toContainText('2 created')
@@ -342,7 +374,7 @@ test('runs the detail review loop with approve, skip, and reject-then-approve be
   expect(storedWorldModel.events.details.evt_stub123).toContain('Approved event detail after feedback.')
 })
 
-test('shows a no-change message for changed=false detail responses', async ({ page }) => {
+test('shows a no-change message for file_action=no_change detail responses', async ({ page }) => {
   await page.route('**/harness/events-index/propose', async (route) => {
     await route.fulfill({
       status: 200,
@@ -393,6 +425,16 @@ test('shows a no-change message for changed=false detail responses', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         actions: ['Created element elt_bundle123: Cloth Bundle (item).'],
+        detail_targets: [
+          {
+            uuid: 'elt_bundle123',
+            summary: 'Cloth Bundle',
+            file: 'elements/elt_bundle123.md',
+            delta_action: 'create',
+            update_context: 'Create the cloth bundle dossier.',
+            kind: 'item',
+          },
+        ],
         detail_files: {
           elt_bundle123: '# Cloth Bundle\n\n## Core Understanding\nOriginal cloth bundle stub detail.\n',
         },
@@ -407,7 +449,7 @@ test('shows a no-change message for changed=false detail responses', async ({ pa
       contentType: 'application/json',
       body: JSON.stringify({
         proposal: {
-          changed: false,
+          file_action: 'no_change',
           rationale: 'Nothing in the diff changes the file-level dossier.',
           approval_message: 'No changes needed.',
         },

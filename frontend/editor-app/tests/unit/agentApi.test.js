@@ -4,10 +4,12 @@ import {
   ApiClientError,
   applyElementsIndex,
   applyEventsIndex,
+  getLlmSettings,
   proposeElementDetail,
   proposeElementsIndex,
   proposeEventDetail,
   proposeEventsIndex,
+  updateLlmSettings,
 } from '../../src/utils/agentApi.js'
 
 describe('agentApi', () => {
@@ -42,6 +44,33 @@ describe('agentApi', () => {
     expect(responseBody.proposal.scan_summary).toBe('Stub response')
   })
 
+  it('loads the current llm settings from the backend', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        backend_mode: 'real',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        timeout_seconds: 120,
+        max_tokens: 8000,
+        has_api_key: true,
+      }),
+    })
+
+    const responseBody = await getLlmSettings()
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/settings/llm'),
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    )
+    expect(responseBody.provider).toBe('gemini')
+  })
+
   it('posts to the events apply endpoint and returns the apply payload', async () => {
     fetch.mockResolvedValue({
       ok: true,
@@ -56,6 +85,7 @@ describe('agentApi', () => {
     })
 
     const responseBody = await applyEventsIndex({
+      diff_text: '+ Added line',
       events_md: '# Events',
       proposal: {
         scan_summary: 'Stub response',
@@ -117,6 +147,7 @@ describe('agentApi', () => {
     })
 
     const responseBody = await applyElementsIndex({
+      diff_text: '+ Added line',
       elements_md: '# Elements',
       proposal: {
         diff_summary: 'Deterministic summary',
@@ -142,7 +173,7 @@ describe('agentApi', () => {
       status: 200,
       json: vi.fn().mockResolvedValue({
         proposal: {
-          changed: true,
+          file_action: 'update',
           rationale: 'Adds a chronology entry.',
           approval_message: 'Ready to review.',
         },
@@ -183,7 +214,7 @@ describe('agentApi', () => {
       status: 200,
       json: vi.fn().mockResolvedValue({
         proposal: {
-          changed: false,
+          file_action: 'no_change',
           rationale: 'No change needed.',
           approval_message: 'Ready to review.',
         },
@@ -214,6 +245,41 @@ describe('agentApi', () => {
       }),
     )
     expect(responseBody.updated_detail_md).toBe('# Event detail')
+  })
+
+  it('posts updated llm settings to the backend', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        backend_mode: 'real',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        timeout_seconds: 45,
+        max_tokens: 4096,
+        has_api_key: true,
+      }),
+    })
+
+    const responseBody = await updateLlmSettings({
+      backend_mode: 'real',
+      provider: 'gemini',
+      api_key: 'test-key',
+      model: 'gemini-2.5-flash',
+      base_url: '',
+      timeout_seconds: 45,
+      max_tokens: 4096,
+    })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/harness/settings/llm'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+    expect(responseBody.max_tokens).toBe(4096)
   })
 
   it('throws a typed ApiClientError for structured error responses', async () => {

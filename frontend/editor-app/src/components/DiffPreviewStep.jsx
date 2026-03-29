@@ -61,7 +61,7 @@ function DiffPreviewFileCard({
 
   return (
     <Box className="review-delta-card review-file-card" data-testid={`diff-preview-file-card-${changedFile.fileId}`}>
-      <Group align="flex-start" justify="space-between" wrap="nowrap">
+      <Group align="flex-start" justify="space-between" wrap="wrap">
         <Group align="flex-start" gap="md" wrap="nowrap">
           <Checkbox
             aria-label={`Include ${changedFile.fileName}`}
@@ -116,7 +116,7 @@ DiffPreviewFileCard.propTypes = {
   onToggleSelected: PropTypes.func.isRequired,
 }
 
-function DiffPreviewStep({ changedFiles, onContinue, onSelectionChange, selectedFileIds }) {
+function DiffPreviewStep({ changedFiles, onContinue, onDiscard, onSelectionChange, selectedFileIds }) {
   const [expandedFileIds, setExpandedFileIds] = useState({})
   const stageCopy = getStageCopy()
   const selectedFileIdSet = useMemo(() => new Set(selectedFileIds), [selectedFileIds])
@@ -145,15 +145,24 @@ function DiffPreviewStep({ changedFiles, onContinue, onSelectionChange, selected
 
   return (
     <Box className="review-panel" data-testid={stageCopy.panelTestId}>
-      <Group align="flex-start" justify="space-between" wrap="nowrap">
+      <Group align="flex-start" justify="space-between" wrap="wrap">
         <Box>
           <Text className="eyebrow">Review Mode</Text>
           <Text className="review-panel-title">{stageCopy.title}</Text>
           <Text className="review-panel-subtitle">{stageCopy.subtitle}</Text>
         </Box>
-        <Text className="review-progress-pill" data-testid="diff-preview-selection-pill">
-          {selectedFileIds.length} selected
-        </Text>
+        <Group align="flex-start" className="review-header-actions" gap="sm">
+          <Text className="review-progress-pill" data-testid="diff-preview-selection-pill">
+            {selectedFileIds.length} selected
+          </Text>
+          <Button
+            data-testid="cancel-review-inline-button"
+            onClick={onDiscard}
+            variant="default"
+          >
+            Cancel Sync
+          </Button>
+        </Group>
       </Group>
 
       <Box className="review-summary-card" mt="xl">
@@ -201,6 +210,7 @@ DiffPreviewStep.propTypes = {
     status: PropTypes.oneOf(['added', 'modified', 'deleted']).isRequired,
   })).isRequired,
   onContinue: PropTypes.func.isRequired,
+  onDiscard: PropTypes.func.isRequired,
   onSelectionChange: PropTypes.func.isRequired,
   selectedFileIds: PropTypes.arrayOf(PropTypes.string).isRequired,
 }

@@ -13,12 +13,16 @@ This backend exposes the contract used by the story editor's world-model sync fl
 
 ## Current status
 
-Only stub mode is implemented today.
+Two backend modes exist today.
 
-- `WORLD_MODEL_BACKEND_MODE=stub` works
-- any other mode currently raises `NotImplementedError`
+- `WORLD_MODEL_BACKEND_MODE=stub` returns deterministic contract fixtures for frontend integration.
+- `WORLD_MODEL_BACKEND_MODE=real` uses an OpenAI-compatible chat-completions backend for:
+  - `POST /harness/events-index/propose`
+  - `POST /harness/elements-index/propose`
+  - `POST /harness/element-detail/propose`
+  - `POST /harness/event-detail/propose`
 
-The frontend currently calls only `POST /harness/events-index/propose`, but the remaining routes are already scaffolded for later integration.
+Apply routes remain deterministic markdown transformers after proposal review.
 
 ## Stack
 
@@ -63,7 +67,12 @@ If you move the frontend to another origin, update `ALLOWED_ORIGINS` in `src/bac
 
 ## Environment variables
 
-- `WORLD_MODEL_BACKEND_MODE`: backend implementation selector. Defaults to `stub`.
+- `WORLD_MODEL_BACKEND_MODE`: backend implementation selector. Supported values: `stub`, `real`. Defaults to `stub`.
+- `WORLD_MODEL_LLM_API_KEY`: required in `real` mode.
+- `WORLD_MODEL_LLM_MODEL`: required in `real` mode.
+- `WORLD_MODEL_LLM_BASE_URL`: optional in `real` mode. Defaults to `https://api.groq.com/openai/v1`.
+- `WORLD_MODEL_LLM_TIMEOUT_SECONDS`: optional in `real` mode. Defaults to `120`.
+- `WORLD_MODEL_LLM_MAX_TOKENS`: optional in `real` mode. Defaults to `8000`.
 
 ## API surface
 

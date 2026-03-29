@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha1
+import logging
 import re
 from typing import Callable
 
 from backend.errors import ApiError
 from backend.index_markdown import parse_index_markdown, render_index_markdown
-from backend.schemas import ElementDecision, ElementKind, ElementsProposal, HistoryEntry
+from backend.logging_utils import log_event
+from backend.schemas import ElementDecision, ElementKind, ElementProposalAction, ElementsProposal, HistoryEntry
+from backend.services.provenance import ProvenanceReference, extract_affected_source_paths, render_provenance_section
 
 ELEMENT_FIELD_NAMES = ["kind", "display_name", "uuid", "aliases", "identification_keys"]
 ELEMENTS_INDEX_PREAMBLE = """# Elements
@@ -23,6 +26,7 @@ KINSHIP_CUE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 AUDITABLE_ELEMENT_KINDS = ("person", "place", "group", "relationship", "concept", "item")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +402,7 @@ def build_candidate_decision(
     existing_index: ParsedElementsIndex,
 ) -> ElementDecision:
     provisional_decision = ElementDecision(
+        action=ElementProposalAction.CREATE,
         display_name=candidate.display_name,
         kind=candidate.kind,
         aliases=list(candidate.aliases),
@@ -414,6 +419,7 @@ def build_candidate_decision(
         return provisional_decision
     return provisional_decision.model_copy(
         update={
+            "action": ElementProposalAction.UPDATE,
             "matched_existing_display_name": matched_record.display_name,
             "matched_existing_uuid": matched_record.uuid,
             "is_new": False,
@@ -432,6 +438,7 @@ def build_existing_mention_decisions(
         for record in mentions_by_kind.get(kind, []):
             decisions.append(
                 ElementDecision(
+                    action=ElementProposalAction.UPDATE,
                     display_name=record.display_name,
                     kind=ElementKind(record.kind),
                     aliases=[],
@@ -487,6 +494,13 @@ def propose_elements_index_with_audit(
     audit_feedback = audit_elements_coverage(proposal, existing_index, diff_text)
     if not audit_feedback:
         return proposal
+    log_event(
+        logger,
+        logging.WARNING,
+        "elements_index_audit_retry",
+        feedback_count=len(audit_feedback),
+        initial_identified_count=len(proposal.identified_elements),
+    )
 
     retry_history = [
         *history,
@@ -499,6 +513,14 @@ def propose_elements_index_with_audit(
     retry_proposal = builder(diff_text, existing_index, retry_history)
     retry_audit_feedback = audit_elements_coverage(retry_proposal, existing_index, diff_text)
     if retry_audit_feedback:
+        log_event(
+            logger,
+            logging.ERROR,
+            "elements_index_audit_failed",
+            feedback_count=len(retry_audit_feedback),
+            retried_identified_count=len(retry_proposal.identified_elements),
+            details=retry_audit_feedback,
+        )
         raise ApiError(
             error="proposal_audit_failed",
             message="The elements proposal failed audit after retry.",
@@ -509,16 +531,37 @@ def propose_elements_index_with_audit(
     return retry_proposal
 
 
-def apply_elements_proposal(elements_markdown: str, proposal: ElementsProposal) -> LayerApplyResult:
+def apply_elements_proposal(
+    elements_markdown: str,
+    proposal: ElementsProposal,
+    diff_text: str = "",
+) -> LayerApplyResult:
     current_index = parse_elements_index(elements_markdown)
     detail_files: dict[str, str] = {}
     actions: list[str] = []
 
     for decision in proposal.identified_elements:
         matched_record = resolve_existing_element(current_index, decision)
-        if matched_record is None:
-            current_index, new_uuid = create_element_record(current_index, decision, detail_files)
+        if decision.action == ElementProposalAction.CREATE:
+            if matched_record is not None:
+                current_index, action = update_element_record(current_index, matched_record, decision)
+                actions.append(action)
+                continue
+            current_index, new_uuid = create_element_record(current_index, decision, detail_files, diff_text)
             actions.append(f"Created element {new_uuid}: {decision.display_name} ({decision.kind.value}).")
+            continue
+
+        if matched_record is None:
+            raise ApiError(
+                error="apply_error",
+                message=f"Could not resolve existing element for {decision.display_name}.",
+                status_code=500,
+                retryable=False,
+            )
+
+        if decision.action == ElementProposalAction.DELETE:
+            current_index = delete_element_record(current_index, matched_record.uuid)
+            actions.append(f"Deleted element {matched_record.uuid}: {matched_record.display_name}.")
             continue
 
         current_index, action = update_element_record(current_index, matched_record, decision)
@@ -532,6 +575,7 @@ def create_element_record(
     current_index: ParsedElementsIndex,
     decision: ElementDecision,
     detail_files: dict[str, str],
+    diff_text: str,
 ) -> tuple[ParsedElementsIndex, str]:
     new_uuid = build_uuid("elt", decision.kind.value, decision.display_name)
     new_record = ElementRecord(
@@ -541,7 +585,7 @@ def create_element_record(
         aliases=decision.aliases,
         identification_keys=decision.identification_keys,
     )
-    detail_files[new_uuid] = build_element_detail_file(new_record, decision.snapshot)
+    detail_files[new_uuid] = build_element_detail_file(new_record, decision.snapshot, diff_text, decision.evidence_from_diff)
     return register_record(current_index, new_record), new_uuid
 
 
@@ -608,6 +652,12 @@ def replace_record(current_index: ParsedElementsIndex, updated_record: ElementRe
     return build_index_state(current_index.index_preamble, next_records)
 
 
+def delete_element_record(current_index: ParsedElementsIndex, target_uuid: str) -> ParsedElementsIndex:
+    next_records = dict(current_index.records_by_uuid)
+    next_records.pop(target_uuid, None)
+    return build_index_state(current_index.index_preamble, next_records)
+
+
 def register_record(current_index: ParsedElementsIndex, new_record: ElementRecord) -> ParsedElementsIndex:
     next_records = dict(current_index.records_by_uuid)
     next_records[new_record.uuid] = new_record
@@ -651,9 +701,27 @@ def renderable_entry(record: ElementRecord) -> dict[str, str]:
     }
 
 
-def build_element_detail_file(record: ElementRecord, snapshot: str) -> str:
+def build_element_detail_file(
+    record: ElementRecord,
+    snapshot: str,
+    diff_text: str,
+    evidence_from_diff: list[str],
+) -> str:
     aliases = ", ".join(record.aliases) or record.display_name
     identification_keys = "; ".join(record.identification_keys) or "-"
+    affected_paths = extract_affected_source_paths(diff_text)
+    source_path = affected_paths[0] if affected_paths else "story/unknown.story"
+    evidence_excerpt = evidence_from_diff[0] if evidence_from_diff else snapshot
+    provenance_lines = render_provenance_section(
+        [
+            ProvenanceReference(
+                section="OBJECT",
+                claim=record.display_name,
+                source_path=source_path,
+                evidence_excerpt=evidence_excerpt,
+            )
+        ]
+    )
     return f"""# {record.display_name}
 
 ## Identification
@@ -680,6 +748,8 @@ def build_element_detail_file(record: ElementRecord, snapshot: str) -> str:
 
 ## Open Threads
 - TBD
+
+{chr(10).join(provenance_lines)}
 """
 
 

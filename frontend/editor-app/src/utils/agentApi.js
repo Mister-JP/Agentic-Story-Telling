@@ -67,17 +67,19 @@ function isAbortError(error) {
   return Boolean(error) && typeof error === 'object' && error.name === 'AbortError'
 }
 
-async function postJson(endpointPath, payload) {
+async function requestJson(endpointPath, { method = 'GET', payload = null } = {}) {
   const controller = new AbortController()
   const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
+    const headers = {}
+    if (payload !== null) {
+      headers['Content-Type'] = 'application/json'
+    }
     const response = await fetch(`${getBackendApiBaseUrl()}${endpointPath}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      method,
+      headers,
+      body: payload === null ? undefined : JSON.stringify(payload),
       signal: controller.signal,
     })
     const responseBody = await parseJsonResponse(response)
@@ -108,6 +110,10 @@ async function postJson(endpointPath, payload) {
   }
 }
 
+async function postJson(endpointPath, payload) {
+  return requestJson(endpointPath, { method: 'POST', payload })
+}
+
 export async function proposeEventsIndex(payload) {
   return postJson('/harness/events-index/propose', payload)
 }
@@ -130,4 +136,12 @@ export async function proposeElementDetail(payload) {
 
 export async function proposeEventDetail(payload) {
   return postJson('/harness/event-detail/propose', payload)
+}
+
+export async function getLlmSettings() {
+  return requestJson('/harness/settings/llm')
+}
+
+export async function updateLlmSettings(payload) {
+  return postJson('/harness/settings/llm', payload)
 }

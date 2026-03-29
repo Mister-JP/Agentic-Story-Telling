@@ -50,6 +50,10 @@ SummaryCard.propTypes = {
 function SyncCompleteStep({ onComplete, reviewSession }) {
   const summary = buildSyncReviewSummary(reviewSession)
   const syncedAtLabel = formatTimestamp(reviewSession.completedSyncAt)
+  const elementDetailUpdates = summary.finalReview.detailUpdates?.filter((item) => item.startsWith('elements/')).length ?? 0
+  const elementDetailDeletes = summary.finalReview.detailDeletes?.filter((item) => item.startsWith('elements/')).length ?? 0
+  const eventDetailUpdates = summary.finalReview.detailUpdates?.filter((item) => item.startsWith('events/')).length ?? 0
+  const eventDetailDeletes = summary.finalReview.detailDeletes?.filter((item) => item.startsWith('events/')).length ?? 0
 
   return (
     <Stack className="review-panel sync-complete-step" data-testid="sync-complete-step" gap="xl">
@@ -75,13 +79,15 @@ function SyncCompleteStep({ onComplete, reviewSession }) {
           lines={[
             { label: 'created', value: summary.elements.createdCount },
             { label: 'updated', value: summary.elements.updatedCount },
+            { label: 'deleted', value: summary.elements.deletedCount },
           ]}
           testId="sync-complete-elements-summary"
           title="Elements"
         />
         <SummaryCard
           lines={[
-            { label: 'detail pages updated', value: summary.elementDetails.approvedCount },
+            { label: 'detail pages updated', value: elementDetailUpdates },
+            { label: 'detail pages deleted', value: elementDetailDeletes },
             { label: 'detail pages skipped', value: summary.elementDetails.skippedCount },
           ]}
           testId="sync-complete-element-details-summary"
@@ -89,7 +95,8 @@ function SyncCompleteStep({ onComplete, reviewSession }) {
         />
         <SummaryCard
           lines={[
-            { label: 'detail pages updated', value: summary.eventDetails.approvedCount },
+            { label: 'detail pages updated', value: eventDetailUpdates },
+            { label: 'detail pages deleted', value: eventDetailDeletes },
             { label: 'detail pages skipped', value: summary.eventDetails.skippedCount },
           ]}
           testId="sync-complete-event-details-summary"

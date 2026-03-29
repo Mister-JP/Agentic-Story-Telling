@@ -19,19 +19,19 @@ describe('htmlToMarkdown', () => {
   it('converts a heading to ATX-style markdown', () => {
     const result = htmlToMarkdown('<h1>Opening scene</h1>');
 
-    expect(result).toBe('# Opening scene');
+    expect(result).toBe('# Opening scene\n');
   });
 
   it('converts a paragraph to plain text', () => {
     const result = htmlToMarkdown('<p>Start close to the character.</p>');
 
-    expect(result).toBe('Start close to the character.');
+    expect(result).toBe('Start close to the character.\n');
   });
 
   it('converts bold text to markdown', () => {
     const result = htmlToMarkdown('<p><strong>Beginning:</strong> guarded.</p>');
 
-    expect(result).toBe('**Beginning:** guarded.');
+    expect(result).toBe('**Beginning:** guarded.\n');
   });
 
   it('converts an unordered list to markdown', () => {
@@ -69,6 +69,12 @@ describe('htmlToMarkdown', () => {
 
   it('returns empty string for an empty Tiptap paragraph', () => {
     expect(htmlToMarkdown('<p></p>')).toBe('');
+  });
+
+  it('normalizes non-empty markdown to end with a trailing newline', () => {
+    const result = htmlToMarkdown('<h1>Chapter</h1><p>Body text.</p>');
+
+    expect(result.endsWith('\n')).toBe(true);
   });
 });
 
@@ -233,6 +239,25 @@ describe('getChangedFiles', () => {
     expect(changes).toHaveLength(0);
   });
 
+  it('treats legacy snapshots without trailing newlines as unchanged', () => {
+    const currentSnapshot = {
+      chapter: {
+        name: 'chapter.story',
+        path: 'chapter.story',
+        markdown: '# Chapter\n\nBody text.\n',
+      },
+    };
+    const legacySnapshot = {
+      chapter: {
+        name: 'chapter.story',
+        path: 'chapter.story',
+        markdown: '# Chapter\n\nBody text.',
+      },
+    };
+
+    expect(getChangedFiles(currentSnapshot, legacySnapshot)).toEqual([]);
+  });
+
   it('handles null snapshots gracefully', () => {
     expect(getChangedFiles(null, null)).toEqual([]);
     expect(getChangedFiles({}, null)).toEqual([]);
@@ -296,6 +321,30 @@ describe('computeFileDiff', () => {
     const diff = computeFileDiff(null, 'content', 'test.story');
 
     expect(diff).toContain('+content');
+  });
+
+  it('does not show an unchanged final paragraph as removed and re-added when appending a new paragraph', () => {
+    const diff = computeFileDiff(
+      '# GJ 1002 b\n\nOriginal paragraph.\n',
+      '# GJ 1002 b\n\nOriginal paragraph.\n\nNew paragraph.\n',
+      'World-1/Book-1/cha2.story',
+    );
+
+    expect(diff).not.toContain('-Original paragraph.');
+    expect(diff).not.toContain('+Original paragraph.');
+    expect(diff).toContain('+New paragraph.');
+  });
+
+  it('normalizes legacy snapshots without trailing newlines before diffing', () => {
+    const diff = computeFileDiff(
+      '# GJ 1002 b\n\nOriginal paragraph.',
+      '# GJ 1002 b\n\nOriginal paragraph.\n\nNew paragraph.\n',
+      'World-1/Book-1/cha2.story',
+    );
+
+    expect(diff).not.toContain('-Original paragraph.');
+    expect(diff).not.toContain('+Original paragraph.');
+    expect(diff).toContain('+New paragraph.');
   });
 });
 

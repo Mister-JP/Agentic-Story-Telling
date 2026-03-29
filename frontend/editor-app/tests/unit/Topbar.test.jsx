@@ -5,6 +5,7 @@ import Topbar from '../../src/components/Topbar.jsx'
 
 const defaultProps = {
   onOpenDialog: vi.fn(),
+  onOpenLlmSettings: vi.fn(),
   projectAction: null,
   projectStatus: null,
   reviewStep: 'events-index',
@@ -46,5 +47,11 @@ describe('Topbar', () => {
 
     expect(screen.getByText('Elements Index Review')).toBeInTheDocument()
     expect(screen.getByText('Approve or request changes before the element proposal is staged for the world model.')).toBeInTheDocument()
+  })
+
+  it('exposes the model settings control', () => {
+    renderTopbar({ viewMode: 'write', selectionMode: 'empty' })
+
+    expect(screen.getByRole('button', { name: 'Model settings' })).toBeInTheDocument()
   })
 })

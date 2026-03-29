@@ -8,6 +8,7 @@ import { createEmptyWorldModel, parseIndexMarkdown } from './worldModel.js'
 function buildInitialReviewState(overrides = {}) {
   return {
     attemptNumber: 1,
+    currentDetailMd: '',
     currentProposal: null,
     currentPreviewDiff: '',
     currentUpdatedDetailMd: '',
@@ -28,19 +29,8 @@ export function getReviewAttemptNumber(history, historyBaseCount = 0) {
   return Math.max((history?.length ?? 0) - historyBaseCount, 0) + 1
 }
 
-function buildFilteredDetails(existingDetails, entries) {
-  const allowedUuids = new Set(entries.map((entry) => entry.uuid))
-  const nextDetails = {}
-
-  for (const [detailUuid, detailMarkdown] of Object.entries(existingDetails ?? {})) {
-    if (!allowedUuids.has(detailUuid)) {
-      continue
-    }
-
-    nextDetails[detailUuid] = detailMarkdown
-  }
-
-  return nextDetails
+function cloneDetails(details) {
+  return { ...(details ?? {}) }
 }
 
 function normalizeLookup(value) {
@@ -182,7 +172,6 @@ function buildNextEventsWorldModel(currentWorldModel, eventsApplyResponse) {
     parsedEvents.indexPreamble ||
     baseWorldModel.events.indexPreamble ||
     DEFAULT_EVENTS_INDEX_PREAMBLE
-  const preservedDetails = buildFilteredDetails(baseWorldModel.events.details, parsedEvents.entries)
 
   return {
     ...baseWorldModel,
@@ -191,7 +180,7 @@ function buildNextEventsWorldModel(currentWorldModel, eventsApplyResponse) {
       indexPreamble: nextEventsPreamble,
       entries: parsedEvents.entries,
       details: {
-        ...preservedDetails,
+        ...cloneDetails(baseWorldModel.events.details),
         ...(eventsApplyResponse?.detail_files ?? {}),
       },
     },
@@ -205,7 +194,6 @@ function buildNextElementsWorldModel(currentWorldModel, elementsApplyResponse) {
     parsedElements.indexPreamble ||
     baseWorldModel.elements.indexPreamble ||
     DEFAULT_ELEMENTS_INDEX_PREAMBLE
-  const preservedDetails = buildFilteredDetails(baseWorldModel.elements.details, parsedElements.entries)
 
   return {
     ...baseWorldModel,
@@ -214,7 +202,7 @@ function buildNextElementsWorldModel(currentWorldModel, elementsApplyResponse) {
       indexPreamble: nextElementsPreamble,
       entries: parsedElements.entries,
       details: {
-        ...preservedDetails,
+        ...cloneDetails(baseWorldModel.elements.details),
         ...(elementsApplyResponse?.detail_files ?? {}),
       },
     },
@@ -291,16 +279,16 @@ export function createReviewHistoryEntry(proposal, reviewerFeedback, attemptNumb
 }
 
 export function buildEventDetailTargets(previousEventsMd, eventsApplyResponse, proposal) {
+  if (Array.isArray(eventsApplyResponse?.detail_targets) && eventsApplyResponse.detail_targets.length > 0) {
+    return eventsApplyResponse.detail_targets
+  }
+
   const parsedBefore = parseIndexMarkdown(previousEventsMd ?? '', EVENT_FIELD_NAMES)
   const parsedAfter = parseIndexMarkdown(eventsApplyResponse?.events_md ?? '', EVENT_FIELD_NAMES)
   const addedEntries = getAddedEntries(parsedBefore.entries, parsedAfter.entries)
   const claimedUuids = new Set()
 
   return (proposal?.deltas ?? []).flatMap((delta) => {
-    if (delta.action === 'delete') {
-      return []
-    }
-
     const resolvedUuid = delta.action === 'create'
       ? resolveCreatedEventUuid(delta, addedEntries, claimedUuids)
       : delta.existing_event_uuid
@@ -313,22 +301,29 @@ export function buildEventDetailTargets(previousEventsMd, eventsApplyResponse, p
 
     return [{
       uuid: resolvedUuid,
-      summary: delta.summary,
+      summary: delta.summary || resolvedUuid,
       file: `events/${resolvedUuid}.md`,
       delta_action: delta.action,
       update_context: delta.reason,
+      provenance_summary: delta.provenance_summary ?? '',
     }]
   })
 }
 
 export function buildElementDetailTargets(previousElementsMd, elementsApplyResponse, proposal) {
+  if (Array.isArray(elementsApplyResponse?.detail_targets) && elementsApplyResponse.detail_targets.length > 0) {
+    return elementsApplyResponse.detail_targets
+  }
+
   const parsedBefore = parseIndexMarkdown(previousElementsMd ?? '', ELEMENT_FIELD_NAMES)
   const parsedAfter = parseIndexMarkdown(elementsApplyResponse?.elements_md ?? '', ELEMENT_FIELD_NAMES)
   const addedEntries = getAddedEntries(parsedBefore.entries, parsedAfter.entries)
   const claimedUuids = new Set()
 
   return (proposal?.identified_elements ?? []).flatMap((decision) => {
-    const resolvedUuid = decision.matched_existing_uuid
+    const resolvedUuid = (decision.action === 'create'
+      ? null
+      : decision.matched_existing_uuid)
       || resolveCreatedElementUuid(decision, addedEntries, claimedUuids)
 
     if (!resolvedUuid) {
@@ -341,9 +336,10 @@ export function buildElementDetailTargets(previousElementsMd, elementsApplyRespo
       uuid: resolvedUuid,
       summary: decision.display_name,
       file: `elements/${resolvedUuid}.md`,
-      delta_action: decision.is_new ? 'create' : 'update',
+      delta_action: decision.action ?? (decision.is_new ? 'create' : 'update'),
       update_context: decision.update_instruction,
       kind: decision.kind,
+      provenance_summary: decision.provenance_summary ?? '',
     }]
   })
 }
@@ -385,6 +381,85 @@ export function createDetailReviewSession(currentSession, {
     currentDetailIndex: 0,
     updatedElementsState: updatedElementsState ?? currentSession.updatedElementsState,
     updatedEventsState: updatedEventsState ?? currentSession.updatedEventsState,
+  }
+}
+
+function buildDeletedUuidSet(actions, entityType) {
+  const deletedUuids = new Set()
+
+  for (const action of actions ?? []) {
+    const match = action.match(new RegExp(`^Deleted ${entityType} (.+?)(?::|\\.|$)`, 'i'))
+    if (match?.[1]) {
+      deletedUuids.add(match[1].trim())
+    }
+  }
+
+  return deletedUuids
+}
+
+function buildFinalReviewGroups(reviewSession) {
+  const groups = {
+    indexDeletes: [],
+    indexMutations: [],
+    detailDeletes: [],
+    detailUpdates: [],
+    retainedNoChange: [],
+  }
+
+  for (const action of reviewSession?.updatedEventsState?.actions ?? []) {
+    if (action.toLowerCase().startsWith('deleted ')) {
+      groups.indexDeletes.push(action)
+    } else {
+      groups.indexMutations.push(action)
+    }
+  }
+
+  for (const action of reviewSession?.updatedElementsState?.actions ?? []) {
+    if (action.toLowerCase().startsWith('deleted ')) {
+      groups.indexDeletes.push(action)
+    } else {
+      groups.indexMutations.push(action)
+    }
+  }
+
+  for (const target of [
+    ...(reviewSession?.elementDetailTargets ?? []),
+    ...(reviewSession?.eventDetailTargets ?? []),
+  ]) {
+    const result = reviewSession?.detailResults?.[target.uuid]
+    if (!result || result.action !== 'approved') {
+      continue
+    }
+
+    if (result.fileAction === 'delete') {
+      groups.detailDeletes.push(`${target.file} — ${target.update_context}`)
+      continue
+    }
+
+    if (result.fileAction === 'no_change') {
+      groups.retainedNoChange.push(
+        `${target.file} — ${result.retentionReason || target.provenance_summary || target.update_context}`,
+      )
+      continue
+    }
+
+    groups.detailUpdates.push(`${target.file} — ${target.update_context}`)
+  }
+
+  return groups
+}
+
+export function createFinalReviewSession(currentSession) {
+  return {
+    ...currentSession,
+    currentPreviewDiff: '',
+    currentProposal: null,
+    currentUpdatedDetailMd: '',
+    error: null,
+    isLoading: false,
+    loadingAction: null,
+    step: REVIEW_STEPS.FINAL_REVIEW,
+    finalReviewGroups: buildFinalReviewGroups(currentSession),
   }
 }
 
@@ -512,6 +587,7 @@ export function buildSyncReviewSummary(reviewSession) {
   return {
     elementDetails: summarizeDetailResults(reviewSession, 'element'),
     elements: buildIndexActionSummary(reviewSession?.updatedElementsState?.actions ?? [], 'element'),
+    finalReview: reviewSession?.finalReviewGroups ?? buildFinalReviewGroups(reviewSession),
     eventDetails: summarizeDetailResults(reviewSession, 'event'),
     events: buildIndexActionSummary(reviewSession?.updatedEventsState?.actions ?? [], 'event'),
   }
@@ -575,11 +651,13 @@ export function applyCompletedSyncReviewResult({
       },
     },
   }
+  const deletedElementUuids = buildDeletedUuidSet(reviewSession?.updatedElementsState?.actions ?? [], 'element')
+  const deletedEventUuids = buildDeletedUuidSet(reviewSession?.updatedEventsState?.actions ?? [], 'event')
   const elementTargetUuids = new Set((reviewSession.elementDetailTargets ?? []).map((target) => target.uuid))
   const eventTargetUuids = new Set((reviewSession.eventDetailTargets ?? []).map((target) => target.uuid))
 
   for (const [uuid, result] of Object.entries(reviewSession.detailResults ?? {})) {
-    if (result.action !== 'approved' || !result.updatedMd) {
+    if (result.action !== 'approved') {
       continue
     }
 
@@ -588,7 +666,11 @@ export function applyCompletedSyncReviewResult({
       || elementTargetUuids.has(uuid)
       || uuid.startsWith('elt_')
     ) {
-      nextWorldModel.elements.details[uuid] = result.updatedMd
+      if (result.fileAction === 'delete' || result.updatedMd === '') {
+        delete nextWorldModel.elements.details[uuid]
+      } else if (result.updatedMd) {
+        nextWorldModel.elements.details[uuid] = result.updatedMd
+      }
       continue
     }
 
@@ -597,8 +679,28 @@ export function applyCompletedSyncReviewResult({
       || eventTargetUuids.has(uuid)
       || uuid.startsWith('evt_')
     ) {
-      nextWorldModel.events.details[uuid] = result.updatedMd
+      if (result.fileAction === 'delete' || result.updatedMd === '') {
+        delete nextWorldModel.events.details[uuid]
+      } else if (result.updatedMd) {
+        nextWorldModel.events.details[uuid] = result.updatedMd
+      }
     }
+  }
+
+  for (const uuid of deletedElementUuids) {
+    const result = reviewSession?.detailResults?.[uuid]
+    if (result?.action !== 'approved' || result.fileAction !== 'delete') {
+      throw new Error(`Deleted element ${uuid} is missing an approved detail-file delete.`)
+    }
+    delete nextWorldModel.elements.details[uuid]
+  }
+
+  for (const uuid of deletedEventUuids) {
+    const result = reviewSession?.detailResults?.[uuid]
+    if (result?.action !== 'approved' || result.fileAction !== 'delete') {
+      throw new Error(`Deleted event ${uuid} is missing an approved detail-file delete.`)
+    }
+    delete nextWorldModel.events.details[uuid]
   }
 
   const currentSnapshot = createContentSnapshot(workspace)

@@ -7,29 +7,39 @@ import ipaddress
 import json
 import logging
 import re
-import socket
 from typing import NoReturn, Protocol, TypeVar
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+import httpx
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.errors import ApiError
 from backend.index_markdown import parse_index_markdown
 from backend.schemas import (
     ChronologyBlockUpdate,
+    DetailFileAction,
     DetailTarget,
     ElementDetailProposeRequest,
     ElementDetailProposeResponse,
     ElementFileUpdateProposal,
     ElementKind,
+    ElementsIndexProposeRequest,
+    ElementsProposal,
     EventAgentOutput,
     EventDetailProposeRequest,
     EventDetailProposeResponse,
     EventFileUpdateProposal,
     EventsIndexProposeRequest,
     HistoryEntry,
+)
+from backend.services.provenance import (
+    DetailImpact,
+    ProvenanceReference,
+    normalize_provenance_section,
+    parse_provenance_references,
+    render_provenance_section,
+    replace_provenance_references,
+    scan_impacted_detail_files,
 )
 
 ELEMENT_FIELD_NAMES = ["kind", "display_name", "uuid", "aliases", "identification_keys"]
@@ -72,15 +82,18 @@ Rules:
 - You are NOT a creative writer. You are a careful canon librarian.
 - Stay local to this one element. Do not propose changes to other elements.
 - The diff is the source of truth for what changed.
-- The page may already have content beyond TBD. Preserve useful existing content unless the diff clearly adds, clarifies, revises, or invalidates it.
+- The page may already have content beyond TBD. Preserve existing content only when it is still supported after considering the diff, the indexes, and the provenance impact summary.
+- If a claim is no longer supported, remove it. Do not keep content merely because it used to be on the page.
 - Do not invent unsupported facts, motives, or relationships.
+- Treat provenance as a filter, not decoration. Keep only the minimum provenance rows needed to justify the surviving claims.
+- If no materially supported claims remain for this page, set `file_action="delete"`.
 - Stable Profile is for durable truths: roles, relationships, possessions, repeated associations, and stable traits.
 - Do not fill Stable Profile with one-off scene actions that belong in chronology.
 - Interpretation should explain what the recent diff suggests this means for the element.
 - Knowledge / Beliefs / Uncertainties should stay grounded in this element's own perspective when applicable.
 - Element-Centered Chronology should be grouped by era, chapter, or date. Prefer headings such as 'Before current narrative' or 'Chapter 8 — June 28, 1998'.
 - Do not flood chronology with minute-by-minute bullets unless exact timing is causally important.
-- Use to_remove only when existing content is clearly wrong or superseded by the diff.
+- Use to_remove when existing content is unsupported, wrong, superseded by the diff, or no longer justified by surviving provenance.
 
 Section guidance:
 
@@ -118,7 +131,13 @@ Output rules:
 - Return only the structured proposal.
 - Be concrete, concise, interpretive, and auditable.
 - Do not emit raw markdown patches or full file content.
-- If the page already has good content and the diff changes nothing relevant, set changed=false.
+- Keep the visible `## Provenance` section synchronized with every surviving claim. Do not preserve orphaned provenance rows.
+- `provenance_replacement` must contain only the rows that still support the retained page after this update.
+- If support disappears for a claim, delete that claim instead of carrying stale provenance.
+- For any retained file, `provenance_replacement` must include at least one support row whose section is exactly `OBJECT`.
+- Format each provenance row as `SECTION | claim | source_path | evidence_excerpt`.
+- If the file should disappear entirely, or if no supported claims survive, set `file_action="delete"`.
+- If the page already has good content and the diff changes nothing relevant, set `file_action="no_change"`.
 """
 
 EVENT_DETAIL_SYSTEM_PROMPT = """
@@ -142,10 +161,12 @@ Rules:
 - You are NOT a creative writer. You are a careful canon librarian.
 - Stay local to this one event. Do not propose changes to other events.
 - The diff is the source of truth for what changed.
-- The page may already have content beyond TBD. Preserve useful existing content
-  unless the diff clearly adds, clarifies, revises, or invalidates it.
+- The page may already have content beyond TBD. Preserve existing content only when it is still supported after considering the diff, the events index, and the provenance impact summary.
+- If a claim is no longer supported, remove it. Do not keep content merely because it used to be on the page.
 - Do not invent unsupported facts or speculate beyond what the diff supports.
-- Use to_remove only when existing content is clearly wrong or superseded by the diff.
+- Treat provenance as a filter, not decoration. Keep only the minimum provenance rows needed to justify the surviving claims.
+- If no materially supported claims remain for this page, set `file_action="delete"`.
+- Use to_remove when existing content is unsupported, wrong, superseded by the diff, or no longer justified by surviving provenance.
 
 Section guidance:
 
@@ -181,8 +202,14 @@ Output rules:
 - Return only the structured proposal.
 - Be concrete, concise, and auditable.
 - Use to_add for new content and to_remove only for content that is now wrong.
+- Keep the visible `## Provenance` section synchronized with every surviving claim. Do not preserve orphaned provenance rows.
+- `provenance_replacement` must contain only the rows that still support the retained page after this update.
+- If support disappears for a claim, delete that claim instead of carrying stale provenance.
+- For any retained file, `provenance_replacement` must include at least one support row whose section is exactly `OBJECT`.
+- Format each provenance row as `SECTION | claim | source_path | evidence_excerpt`.
+- If the file should disappear entirely, or if no supported claims survive, set `file_action="delete"`.
 - If the page already has good content and the diff changes nothing relevant,
-  set changed=false.
+  set `file_action="no_change"`.
 """
 
 ELEMENT_DETAIL_USER_TEMPLATE = """Current elements.md index:
@@ -201,6 +228,7 @@ Element update target:
 - Kind: {kind}
 - Delta action: {delta_action}
 - Context: {update_context}
+- Provenance impact: {provenance_summary}
 
 Current parsed element object:
 <current_object>
@@ -233,6 +261,7 @@ Event update target:
 - Summary: {summary}
 - Delta action: {delta_action}
 - Context: {update_context}
+- Provenance impact: {provenance_summary}
 
 Current parsed event object:
 <current_object>
@@ -255,6 +284,109 @@ Enrich with deeper understanding, causal context, and consequences.
 Preserve existing content that is still accurate.
 """
 
+ELEMENTS_INDEX_SYSTEM_PROMPT = """
+You are the Elements Index Agent.
+
+Your single responsibility is to maintain the canonical elements index for a story world.
+
+You will receive:
+1. The current contents of elements.md. This includes the element definitions and the current index entries.
+2. An incoming manuscript diff showing what changed in the story text.
+3. Compact provenance impact summaries for existing detail files whose support touches the affected manuscript paths.
+
+CORE IDENTITY
+
+You are NOT a creative writer, scene summarizer, or lore expander.
+You are a careful canon librarian for stable story elements.
+
+METHOD
+
+Follow this exact process:
+
+1. Read the diff top to bottom and identify story-relevant entities, places, groups,
+   relationships, concepts, and items that materially matter.
+2. Ignore incidental props, scenery, and one-off actions unless they become durable
+   story evidence or recurring world-model material.
+3. Match each candidate against elements.md before deciding it is new.
+4. Prefer updating an existing canonical element when the diff adds evidence about
+   something already tracked under a different alias or phrasing.
+
+GRANULARITY
+
+Track durable world-model elements, not transient beats.
+
+Good candidates:
+- people with ongoing relevance
+- places that materially matter
+- groups or institutions with recurring story role
+- relationships that become canonically important
+- concepts, mysteries, vows, or codes that the story treats as durable
+- items that function as evidence, keys, symbols, or recurring objects
+
+Bad candidates:
+- incidental furniture
+- generic weather or atmosphere
+- one-off gestures with no ongoing relevance
+- prose-only descriptors that do not identify a stable element
+
+DECISION DISCIPLINE
+
+- Prefer matching to an existing UUID when the diff is clearly about an existing element.
+- Do NOT create duplicates because the new prose uses richer wording.
+- `snapshot` should explain why this element matters now.
+- `update_instruction` should tell downstream detail review what to carry forward.
+- `evidence_from_diff` must quote or closely cite concrete manuscript evidence.
+
+MATCHING RULES
+
+- If the element already exists, set `matched_existing_display_name` and `matched_existing_uuid`.
+- If it is genuinely new, leave those fields null and set `action="create"`.
+- Use `action="delete"` when the diff and provenance context show that the element no longer has durable surviving support.
+- Do not keep an element solely because it existed before. If its supporting evidence is gone and no replacement support remains, delete it.
+- NEVER invent a UUID.
+- Use aliases and identification_keys to improve matching and future retrieval.
+
+FEEDBACK HANDLING
+
+If prior attempts and reviewer feedback are included in the conversation:
+1. Read the feedback carefully.
+2. Incorporate it into your revised proposal.
+3. Do NOT repeat the same mistakes.
+
+OUTPUT
+
+Return ONLY the structured output in the required schema.
+If the diff implies no meaningful element-index change, return an empty identified_elements list.
+"""
+
+ELEMENTS_INDEX_USER_TEMPLATE = """Current elements.md:
+
+<elements_md>
+{elements_md}
+</elements_md>
+
+Incoming manuscript diff:
+
+<diff>
+{diff_text}
+</diff>
+
+Impacted existing detail files:
+
+<impacted_details>
+{impacted_details}
+</impacted_details>
+
+Task:
+1. Read the definitions in elements.md. They are your operating contract.
+2. Identify durable, story-relevant elements affected by the diff.
+3. Match each candidate against the current index before proposing a new element.
+4. Return create, update, or delete decisions in the structured schema.
+5. Use exact existing UUIDs only when they are present in elements.md.
+6. Use the provenance impact summaries to reason about deletions or partial retention.
+7. If an existing element no longer has durable surviving support after the diff, prefer delete over weak retention.
+"""
+
 EVENTS_INDEX_SYSTEM_PROMPT = """
 You are the Events Index Agent.
 
@@ -263,6 +395,7 @@ Your single responsibility is to maintain the canonical events index for a story
 You will receive:
 1. The current contents of events.md. This includes the event definitions and the current index entries.
 2. An incoming manuscript diff showing what changed in the story text.
+3. Compact provenance impact summaries for existing event detail files whose support touches the affected manuscript paths.
 
 CORE IDENTITY
 
@@ -307,7 +440,8 @@ DECISION DISCIPLINE
 - Prefer UPDATE over CREATE when the diff expands or clarifies an already indexed event.
 - Do NOT create duplicates because the prose is richer or more specific.
 - CREATE only when the diff introduces a distinct bounded happening not in the index.
-- DELETE only when the diff clearly removes or invalidates a previously indexed event.
+- DELETE when the diff or provenance context shows that a previously indexed event no longer has surviving support.
+- Do not keep an event solely because it existed before. If its supporting evidence is gone and no replacement support remains, delete it.
 
 UUID RULES
 
@@ -346,12 +480,20 @@ Incoming manuscript diff:
 {diff_text}
 </diff>
 
+Impacted existing detail files:
+
+<impacted_details>
+{impacted_details}
+</impacted_details>
+
 Task:
 1. Read the definitions in events.md. They are your operating contract.
 2. Follow the two-pass method: scan all candidate events, then consolidate.
 3. For each final event, decide create / update / delete against the current index.
 4. For updates and deletes, match to the existing UUID exactly.
 5. Return the structured output.
+6. Use the provenance impact summaries to reason about deletions or retention.
+7. If an existing event no longer has surviving support after the diff, prefer delete over weak retention.
 """
 
 
@@ -372,6 +514,7 @@ class ParsedElementFile(BaseModel):
     knowledge_lines: list[str] = Field(default_factory=list)
     chronology_blocks: list[ChronologyBlock] = Field(default_factory=list)
     open_threads_lines: list[str] = Field(default_factory=list)
+    provenance_references: list[ProvenanceReference] = Field(default_factory=list)
 
 
 class ParsedEventFile(BaseModel):
@@ -385,6 +528,7 @@ class ParsedEventFile(BaseModel):
     participants_lines: list[str] = Field(default_factory=list)
     evidence_lines: list[str] = Field(default_factory=list)
     open_threads_lines: list[str] = Field(default_factory=list)
+    provenance_references: list[ProvenanceReference] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,6 +546,11 @@ class EventPromptContext:
 
 
 class DetailProposalProvider(Protocol):
+    def propose_elements_index(
+        self,
+        request: ElementsIndexProposeRequest,
+    ) -> ElementsProposal: ...
+
     def propose_events_index(
         self,
         request: EventsIndexProposeRequest,
@@ -445,10 +594,32 @@ def build_review_messages(
 
 
 def build_events_index_user_prompt(request: EventsIndexProposeRequest) -> str:
+    impacted_details = build_impacted_detail_summaries(request.current_detail_files, request.diff_text)
     return EVENTS_INDEX_USER_TEMPLATE.format(
         events_md=request.events_md or "[events index unavailable]",
         diff_text=request.diff_text,
+        impacted_details=impacted_details,
     )
+
+
+def build_elements_index_user_prompt(request: ElementsIndexProposeRequest) -> str:
+    impacted_details = build_impacted_detail_summaries(request.current_detail_files, request.diff_text)
+    return ELEMENTS_INDEX_USER_TEMPLATE.format(
+        elements_md=request.elements_md or "[elements index unavailable]",
+        diff_text=request.diff_text,
+        impacted_details=impacted_details,
+    )
+
+
+def build_impacted_detail_summaries(current_detail_files: dict[str, str], diff_text: str) -> str:
+    impacts = scan_impacted_detail_files(current_detail_files, diff_text)
+    if not impacts:
+        return "[No existing detail files have provenance tied to the affected manuscript paths.]"
+
+    lines: list[str] = []
+    for uuid, impact in sorted(impacts.items()):
+        lines.append(f"- {uuid}: {impact.summary}")
+    return "\n".join(lines)
 
 
 def extract_section(text: str, start_heading: str, end_heading: str | None = None) -> str:
@@ -759,6 +930,75 @@ def merge_chronology_blocks(
     return list(merged_blocks.values())
 
 
+def remove_chronology_blocks(
+    current_blocks: list[ChronologyBlock],
+    blocks_to_remove: list[ChronologyBlockUpdate],
+) -> list[ChronologyBlock]:
+    if not blocks_to_remove:
+        return list(current_blocks)
+
+    removals_by_heading = {
+        block.heading.strip(): {normalize_line(item) for item in clean_element_lines(block.entries)}
+        for block in blocks_to_remove
+        if block.heading.strip()
+    }
+
+    next_blocks: list[ChronologyBlock] = []
+    for block in current_blocks:
+        heading = block.heading.strip()
+        if not heading:
+            continue
+        removal_set = removals_by_heading.get(heading, set())
+        kept_entries = [
+            entry
+            for entry in clean_element_lines(block.entries)
+            if normalize_line(entry) not in removal_set
+        ]
+        if kept_entries:
+            next_blocks.append(ChronologyBlock(heading=heading, entries=kept_entries))
+
+    return next_blocks
+
+
+def ensure_object_support_exists(
+    references: list[ProvenanceReference],
+    *,
+    file_action: DetailFileAction,
+) -> None:
+    if file_action == DetailFileAction.DELETE:
+        return
+    if not references:
+        return
+    if any(normalize_provenance_section(reference.section) == "OBJECT" for reference in references):
+        return
+    raise ApiError(
+        error="invalid_provenance",
+        message="Every retained detail file must keep at least one OBJECT provenance edge.",
+        status_code=500,
+        retryable=False,
+    )
+
+
+def ensure_updated_file_replaces_provenance(
+    current_references: list[ProvenanceReference],
+    replacement_lines: list[str],
+    *,
+    file_action: DetailFileAction,
+) -> None:
+    if file_action != DetailFileAction.UPDATE:
+        return
+    if not current_references:
+        return
+    if replacement_lines:
+        return
+    raise ApiError(
+        error="invalid_provenance",
+        message="Updated retained detail files must provide provenance_replacement when prior provenance exists.",
+        status_code=500,
+        retryable=False,
+    )
+
+
 def find_index_entry_by_uuid(
     markdown: str,
     field_names: list[str],
@@ -814,7 +1054,8 @@ def parse_element_detail_markdown(
         "## Element-Centered Chronology",
     )
     chronology = extract_section(text, "## Element-Centered Chronology", "## Open Threads")
-    open_threads = extract_section(text, "## Open Threads", None)
+    open_threads = extract_section(text, "## Open Threads", "## Provenance")
+    provenance_references = parse_provenance_references(text)
 
     if not core_understanding:
         core_understanding = extract_section(text, "## Snapshot", "## Attributes")
@@ -850,6 +1091,7 @@ def parse_element_detail_markdown(
         knowledge_lines=clean_element_lines(parse_bullet_lines(knowledge)),
         chronology_blocks=chronology_blocks,
         open_threads_lines=clean_element_lines(parse_bullet_lines(open_threads)),
+        provenance_references=provenance_references,
     )
 
 
@@ -903,6 +1145,7 @@ def render_element_detail_markdown(element: ParsedElementFile) -> str:
 
     lines.extend(["", "## Open Threads"])
     lines.extend(bullet_section(clean_element_lines(element.open_threads_lines)))
+    lines.extend(["", *render_provenance_section(list(element.provenance_references))])
     lines.append("")
     return "\n".join(lines)
 
@@ -911,6 +1154,11 @@ def apply_element_file_update(
     current_element: ParsedElementFile,
     proposal: ElementFileUpdateProposal,
 ) -> ParsedElementFile:
+    ensure_updated_file_replaces_provenance(
+        current_element.provenance_references,
+        proposal.provenance_replacement,
+        file_action=proposal.file_action,
+    )
     new_element = current_element.model_copy(deep=True)
     replacement = clean_element_paragraph(proposal.core_understanding_replacement or "")
     if replacement:
@@ -934,11 +1182,20 @@ def apply_element_file_update(
         new_element.chronology_blocks,
         proposal.chronology_blocks_to_add,
     )
+    new_element.chronology_blocks = remove_chronology_blocks(
+        new_element.chronology_blocks,
+        proposal.chronology_blocks_to_remove,
+    )
     new_element.open_threads_lines = merge_element_section_lines(
         new_element.open_threads_lines,
         proposal.open_threads_to_add,
         proposal.open_threads_to_remove,
     )
+    new_element.provenance_references = replace_provenance_references(
+        new_element.provenance_references,
+        proposal.provenance_replacement,
+    )
+    ensure_object_support_exists(new_element.provenance_references, file_action=proposal.file_action)
     return new_element
 
 
@@ -960,6 +1217,7 @@ def build_element_prompt_context(request: ElementDetailProposeRequest) -> Elemen
         kind=kind_value or "unknown",
         delta_action=request.target.delta_action,
         update_context=request.target.update_context,
+        provenance_summary=request.target.provenance_summary or "[No provenance impact summary provided.]",
         current_object_json=current_object.model_dump_json(indent=2),
         current_raw_markdown=current_raw_markdown,
         diff_text=request.diff_text,
@@ -977,11 +1235,23 @@ def build_element_detail_response(
     prompt_context: ElementPromptContext | None = None,
 ) -> ElementDetailProposeResponse:
     prompt_context = prompt_context or build_element_prompt_context(request)
-    if not proposal.changed:
+    if proposal.file_action == DetailFileAction.NO_CHANGE:
         return ElementDetailProposeResponse(
             proposal=proposal,
             preview_diff="",
             updated_detail_md=prompt_context.current_raw_markdown,
+        )
+
+    if proposal.file_action == DetailFileAction.DELETE:
+        preview_diff = build_unified_diff(
+            prompt_context.current_raw_markdown,
+            "",
+            request.target.file,
+        )
+        return ElementDetailProposeResponse(
+            proposal=proposal,
+            preview_diff=preview_diff,
+            updated_detail_md="",
         )
 
     updated_object = apply_element_file_update(prompt_context.current_object, proposal)
@@ -1022,6 +1292,7 @@ def parse_event_detail_markdown(
 
     index_entry = find_index_entry_by_uuid(events_markdown, EVENT_FIELD_NAMES, target.uuid) or {}
     core_understanding = extract_section(text, "## Core Understanding", "## Causal Context")
+    provenance_references = parse_provenance_references(text)
     return ParsedEventFile(
         uuid=uuid or target.uuid,
         when=when or index_entry.get("when", ""),
@@ -1044,7 +1315,8 @@ def parse_event_detail_markdown(
         evidence_lines=parse_bullet_lines(
             extract_section(text, "## Evidence & Grounding", "## Open Threads")
         ),
-        open_threads_lines=parse_bullet_lines(extract_section(text, "## Open Threads", None)),
+        open_threads_lines=parse_bullet_lines(extract_section(text, "## Open Threads", "## Provenance")),
+        provenance_references=provenance_references,
     )
 
 
@@ -1072,6 +1344,7 @@ def render_event_detail_markdown(event: ParsedEventFile) -> str:
     lines.extend(bullet_section(event.evidence_lines))
     lines.extend(["", "## Open Threads"])
     lines.extend(bullet_section(event.open_threads_lines))
+    lines.extend(["", *render_provenance_section(list(event.provenance_references))])
     lines.append("")
     return "\n".join(lines)
 
@@ -1080,6 +1353,11 @@ def apply_event_file_update(
     current_event: ParsedEventFile,
     proposal: EventFileUpdateProposal,
 ) -> ParsedEventFile:
+    ensure_updated_file_replaces_provenance(
+        current_event.provenance_references,
+        proposal.provenance_replacement,
+        file_action=proposal.file_action,
+    )
     new_event = current_event.model_copy(deep=True)
     if proposal.core_understanding_replacement and proposal.core_understanding_replacement.strip():
         new_event.core_understanding = proposal.core_understanding_replacement.strip()
@@ -1108,6 +1386,11 @@ def apply_event_file_update(
         proposal.open_threads_to_add,
         proposal.open_threads_to_remove,
     )
+    new_event.provenance_references = replace_provenance_references(
+        new_event.provenance_references,
+        proposal.provenance_replacement,
+    )
+    ensure_object_support_exists(new_event.provenance_references, file_action=proposal.file_action)
     return new_event
 
 
@@ -1124,6 +1407,7 @@ def build_event_prompt_context(request: EventDetailProposeRequest) -> EventPromp
         summary=current_object.summary or request.target.summary,
         delta_action=request.target.delta_action,
         update_context=request.target.update_context,
+        provenance_summary=request.target.provenance_summary or "[No provenance impact summary provided.]",
         current_object_json=current_object.model_dump_json(indent=2),
         current_raw_markdown=current_raw_markdown,
         diff_text=request.diff_text,
@@ -1141,11 +1425,23 @@ def build_event_detail_response(
     prompt_context: EventPromptContext | None = None,
 ) -> EventDetailProposeResponse:
     prompt_context = prompt_context or build_event_prompt_context(request)
-    if not proposal.changed:
+    if proposal.file_action == DetailFileAction.NO_CHANGE:
         return EventDetailProposeResponse(
             proposal=proposal,
             preview_diff="",
             updated_detail_md=prompt_context.current_raw_markdown,
+        )
+
+    if proposal.file_action == DetailFileAction.DELETE:
+        preview_diff = build_unified_diff(
+            prompt_context.current_raw_markdown,
+            "",
+            request.target.file,
+        )
+        return EventDetailProposeResponse(
+            proposal=proposal,
+            preview_diff=preview_diff,
+            updated_detail_md="",
         )
 
     updated_object = apply_event_file_update(prompt_context.current_object, proposal)
@@ -1168,6 +1464,7 @@ class OpenAICompatibleDetailProposalProvider:
     base_url: str
     model: str
     timeout_seconds: int = 120
+    max_tokens: int = 8000
 
     def __repr__(self) -> str:
         return (
@@ -1175,7 +1472,49 @@ class OpenAICompatibleDetailProposalProvider:
             "api_key='***', "
             f"base_url={self.base_url!r}, "
             f"model={self.model!r}, "
-            f"timeout_seconds={self.timeout_seconds!r})"
+            f"timeout_seconds={self.timeout_seconds!r}, "
+            f"max_tokens={self.max_tokens!r})"
+        )
+
+    @classmethod
+    def from_settings(
+        cls,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout_seconds: int = 120,
+        max_tokens: int = 8000,
+    ) -> "OpenAICompatibleDetailProposalProvider":
+        missing_values: list[str] = []
+        if not api_key:
+            missing_values.append("api_key")
+        if not model:
+            missing_values.append("model")
+        if missing_values:
+            raise ApiError(
+                error="llm_configuration_error",
+                message="The configured real backend requires: " + ", ".join(missing_values),
+                status_code=500,
+                retryable=False,
+            )
+
+        try:
+            validated_base_url = validate_llm_base_url(base_url)
+        except ValueError as exc:
+            raise ApiError(
+                error="llm_configuration_error",
+                message=str(exc),
+                status_code=500,
+                retryable=False,
+            ) from exc
+
+        return cls(
+            api_key=api_key,
+            base_url=validated_base_url,
+            model=model,
+            timeout_seconds=max(int(timeout_seconds), 1),
+            max_tokens=max(int(max_tokens), 1),
         )
 
     @classmethod
@@ -1186,6 +1525,7 @@ class OpenAICompatibleDetailProposalProvider:
         base_url = os.getenv("WORLD_MODEL_LLM_BASE_URL", "https://api.groq.com/openai/v1").strip()
         model = os.getenv("WORLD_MODEL_LLM_MODEL", "").strip()
         timeout_raw = os.getenv("WORLD_MODEL_LLM_TIMEOUT_SECONDS", "120").strip()
+        max_tokens_raw = os.getenv("WORLD_MODEL_LLM_MAX_TOKENS", "8000").strip()
 
         missing_values: list[str] = []
         if not api_key:
@@ -1214,20 +1554,21 @@ class OpenAICompatibleDetailProposalProvider:
             ) from exc
 
         try:
-            validated_base_url = validate_llm_base_url(base_url)
+            max_tokens = max(int(max_tokens_raw), 1)
         except ValueError as exc:
             raise ApiError(
                 error="llm_configuration_error",
-                message=str(exc),
+                message="WORLD_MODEL_LLM_MAX_TOKENS must be an integer.",
                 status_code=500,
                 retryable=False,
             ) from exc
 
-        return cls(
+        return cls.from_settings(
             api_key=api_key,
-            base_url=validated_base_url,
+            base_url=base_url,
             model=model,
             timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
         )
 
     def propose_element_detail(
@@ -1268,6 +1609,18 @@ class OpenAICompatibleDetailProposalProvider:
             proposal_label="events index proposal",
         )
 
+    def propose_elements_index(
+        self,
+        request: ElementsIndexProposeRequest,
+    ) -> ElementsProposal:
+        return self._propose_with_schema(
+            system_prompt=ELEMENTS_INDEX_SYSTEM_PROMPT,
+            user_prompt=build_elements_index_user_prompt(request),
+            history=request.history,
+            schema_model=ElementsProposal,
+            proposal_label="elements index proposal",
+        )
+
     def _propose_with_schema(
         self,
         *,
@@ -1283,7 +1636,34 @@ class OpenAICompatibleDetailProposalProvider:
             history=history,
         )
         response_json = self._invoke(messages, proposal_label=proposal_label)
-        return schema_model.model_validate(response_json)
+        normalized_response_json = self._normalize_schema_response(
+            response_json,
+            schema_model=schema_model,
+            proposal_label=proposal_label,
+        )
+        try:
+            return schema_model.model_validate(normalized_response_json)
+        except ValidationError as exc:
+            raise ApiError(
+                error="llm_error",
+                message=f"The LLM returned JSON that did not match the schema for the {proposal_label}.",
+                status_code=502,
+                retryable=True,
+                details=[error["msg"] for error in exc.errors()],
+            ) from exc
+
+    def _normalize_schema_response(
+        self,
+        response_json: dict,
+        *,
+        schema_model: type[BaseModel],
+        proposal_label: str,
+    ) -> dict:
+        if schema_model is ElementsProposal:
+            return normalize_elements_index_response(response_json)
+        if schema_model is EventAgentOutput:
+            return normalize_events_index_response(response_json)
+        return response_json
 
     def _append_schema(self, user_prompt: str, schema_model: type[BaseModel]) -> str:
         schema = json.dumps(schema_model.model_json_schema(), indent=2)
@@ -1300,47 +1680,37 @@ class OpenAICompatibleDetailProposalProvider:
         *,
         proposal_label: str,
     ) -> dict:
-        request_body = json.dumps(
-            {
-                "model": self.model,
-                "temperature": 0,
-                "messages": messages,
-            }
-        ).encode("utf-8")
-        request = urllib_request.Request(
-            url=f"{self.base_url}/chat/completions",
-            data=request_body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
         try:
-            with urllib_request.urlopen(request, timeout=self.timeout_seconds) as response:
-                response_bytes = response.read()
-        except urllib_error.HTTPError as exc:
-            self._raise_http_error(exc, response_body=self._read_http_error_body(exc))
-        except urllib_error.URLError as exc:
-            if isinstance(exc.reason, socket.timeout):
-                raise ApiError(
-                    error="llm_timeout",
-                    message=f"The LLM call timed out after {self.timeout_seconds} seconds. Please try again.",
-                    status_code=504,
-                    retryable=True,
-                ) from exc
-            raise ApiError(
-                error="llm_error",
-                message="The LLM request failed before a response was returned.",
-                status_code=502,
-                retryable=True,
-            ) from exc
-        except TimeoutError as exc:
+            response = httpx.post(
+                f"{self.base_url}/chat/completions",
+                json={
+                    "model": self.model,
+                    "temperature": 0,
+                    "max_tokens": self.max_tokens,
+                    "messages": messages,
+                },
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            response_bytes = response.content
+        except httpx.TimeoutException as exc:
             raise ApiError(
                 error="llm_timeout",
                 message=f"The LLM call timed out after {self.timeout_seconds} seconds. Please try again.",
                 status_code=504,
+                retryable=True,
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            self._raise_http_error(exc.response.status_code, response_body=exc.response.content)
+        except httpx.RequestError as exc:
+            raise ApiError(
+                error="llm_error",
+                message="The LLM request failed before a response was returned.",
+                status_code=502,
                 retryable=True,
             ) from exc
 
@@ -1359,20 +1729,13 @@ class OpenAICompatibleDetailProposalProvider:
         content = extract_message_content(response_body)
         return parse_json_content(content, proposal_label=proposal_label)
 
-    def _read_http_error_body(self, exc: urllib_error.HTTPError) -> bytes:
-        response_body = exc.read() or b""
-        if getattr(exc, "fp", None) is not None:
-            exc.fp = io.BytesIO(response_body)
-        return response_body
-
     def _raise_http_error(
         self,
-        exc: urllib_error.HTTPError,
+        status_code: int,
         response_body: bytes | None = None,
     ) -> NoReturn:
-        status_code = exc.code
         response_message = "The LLM returned an unexpected error."
-        response_body = response_body if response_body is not None else self._read_http_error_body(exc)
+        response_body = response_body if response_body is not None else b""
         response_message = extract_http_error_message(response_body) or response_message
 
         if status_code == 429:
@@ -1381,7 +1744,7 @@ class OpenAICompatibleDetailProposalProvider:
                 message=response_message,
                 status_code=429,
                 retryable=True,
-            ) from exc
+            )
 
         if status_code == 408 or status_code >= 504:
             raise ApiError(
@@ -1389,7 +1752,7 @@ class OpenAICompatibleDetailProposalProvider:
                 message=response_message,
                 status_code=504,
                 retryable=True,
-            ) from exc
+            )
 
         if status_code in {401, 403}:
             # Upstream credential failures stay server-side, so expose them as a gateway error.
@@ -1398,14 +1761,14 @@ class OpenAICompatibleDetailProposalProvider:
                 message=response_message,
                 status_code=502,
                 retryable=False,
-            ) from exc
+            )
 
         raise ApiError(
             error="llm_error",
             message=response_message,
             status_code=502,
             retryable=True,
-        ) from exc
+        )
 
 
 def validate_llm_base_url(base_url: str) -> str:
@@ -1467,9 +1830,36 @@ def parse_json_content(content: str, *, proposal_label: str = "detail proposal")
     array_message = f"The LLM returned a JSON array for the {proposal_label}; expected a JSON object."
     invalid_message = f"The LLM returned invalid JSON for the {proposal_label}."
     decoder = json.JSONDecoder()
+
+    def unwrap_singleton_object_array(parsed_content: object) -> dict | None:
+        if not isinstance(parsed_content, list) or len(parsed_content) != 1:
+            return None
+        only_item = parsed_content[0]
+        if not isinstance(only_item, dict):
+            return None
+        return only_item
+
+    def wrap_index_array(parsed_content: object) -> dict | None:
+        if not isinstance(parsed_content, list) or not parsed_content:
+            return None
+        if not all(isinstance(item, dict) for item in parsed_content):
+            return None
+        if proposal_label == "elements index proposal":
+            return {"identified_elements": parsed_content}
+        if proposal_label == "events index proposal":
+            return {"deltas": parsed_content}
+        return None
+
     try:
+        parsed_content = json.loads(content)
+        singleton_object = unwrap_singleton_object_array(parsed_content)
+        if singleton_object is not None:
+            return singleton_object
+        wrapped_index_array = wrap_index_array(parsed_content)
+        if wrapped_index_array is not None:
+            return wrapped_index_array
         return require_json_object(
-            json.loads(content),
+            parsed_content,
             array_message=array_message,
             invalid_message=invalid_message,
         )
@@ -1482,6 +1872,12 @@ def parse_json_content(content: str, *, proposal_label: str = "detail proposal")
             if isinstance(parsed_content, dict):
                 return parsed_content
             if isinstance(parsed_content, list):
+                singleton_object = unwrap_singleton_object_array(parsed_content)
+                if singleton_object is not None:
+                    return singleton_object
+                wrapped_index_array = wrap_index_array(parsed_content)
+                if wrapped_index_array is not None:
+                    return wrapped_index_array
                 raise ApiError(
                     error="llm_error",
                     message=array_message,
@@ -1494,3 +1890,45 @@ def parse_json_content(content: str, *, proposal_label: str = "detail proposal")
             status_code=502,
             retryable=True,
         )
+
+
+def normalize_elements_index_response(response_json: dict) -> dict:
+    if "identified_elements" in response_json:
+        return {
+            "diff_summary": response_json.get("diff_summary") or "LLM proposed element-index updates from the manuscript diff.",
+            "rationale": response_json.get("rationale") or "Recovered element-index proposal from model output.",
+            "identified_elements": response_json.get("identified_elements") or [],
+            "approval_message": response_json.get("approval_message")
+            or "Review the proposed element creations and updates before applying them.",
+        }
+
+    element_decision_keys = {
+        "display_name",
+        "kind",
+        "aliases",
+        "identification_keys",
+        "snapshot",
+        "update_instruction",
+        "evidence_from_diff",
+        "matched_existing_display_name",
+        "matched_existing_uuid",
+        "is_new",
+    }
+    if element_decision_keys & set(response_json):
+        return {
+            "diff_summary": "LLM proposed one element-index update from the manuscript diff.",
+            "rationale": "Recovered a single element decision from model output that omitted the outer proposal envelope.",
+            "identified_elements": [response_json],
+            "approval_message": "Review the proposed element creations and updates before applying them.",
+        }
+
+    return response_json
+
+
+def normalize_events_index_response(response_json: dict) -> dict:
+    if "deltas" in response_json:
+        return {
+            "scan_summary": response_json.get("scan_summary") or "LLM proposed events-index updates from the manuscript diff.",
+            "deltas": response_json.get("deltas") or [],
+        }
+    return response_json

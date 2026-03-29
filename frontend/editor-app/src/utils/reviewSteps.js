@@ -4,6 +4,7 @@ export const REVIEW_STEPS = Object.freeze({
   ELEMENTS_INDEX: 'elements-index',
   ELEMENT_DETAILS: 'element-details',
   EVENT_DETAILS: 'event-details',
+  FINAL_REVIEW: 'final-review',
   COMPLETE: 'complete',
 })
 
@@ -25,7 +26,8 @@ const REVIEW_STEP_ORDER = Object.freeze({
   [REVIEW_STEPS.ELEMENTS_INDEX]: 1,
   [REVIEW_STEPS.ELEMENT_DETAILS]: 2,
   [REVIEW_STEPS.EVENT_DETAILS]: 3,
-  [REVIEW_STEPS.COMPLETE]: 4,
+  [REVIEW_STEPS.FINAL_REVIEW]: 4,
+  [REVIEW_STEPS.COMPLETE]: 5,
 })
 
 const REVIEW_STEP_PROGRESS = Object.freeze({
@@ -34,7 +36,8 @@ const REVIEW_STEP_PROGRESS = Object.freeze({
   [REVIEW_STEPS.ELEMENTS_INDEX]: 1,
   [REVIEW_STEPS.ELEMENT_DETAILS]: 2,
   [REVIEW_STEPS.EVENT_DETAILS]: 3,
-  [REVIEW_STEPS.COMPLETE]: 4,
+  [REVIEW_STEPS.FINAL_REVIEW]: 4,
+  [REVIEW_STEPS.COMPLETE]: 5,
 })
 
 export function isIndexReviewStep(step) {

@@ -13,6 +13,15 @@ const turndownInstance = new TurndownService({
   codeBlockStyle: 'fenced',
 });
 
+function normalizeMarkdownContent(markdown) {
+  if (typeof markdown !== 'string') {
+    return '';
+  }
+
+  const trimmedMarkdown = markdown.replace(/\s+$/, '');
+  return trimmedMarkdown === '' ? '' : `${trimmedMarkdown}\n`;
+}
+
 /**
  * Convert a Tiptap HTML content string into clean Markdown.
  * Returns an empty string for falsy or empty input.
@@ -30,7 +39,7 @@ export function htmlToMarkdown(htmlString) {
     return '';
   }
 
-  return turndownInstance.turndown(htmlString);
+  return normalizeMarkdownContent(turndownInstance.turndown(htmlString));
 }
 
 // ── Workspace snapshot ───────────────────────────────────────────────────
@@ -94,7 +103,7 @@ export function getChangedFiles(currentSnapshot, lastSyncedSnapshot) {
 
   // Detect added and modified files
   for (const fileId of Object.keys(current)) {
-    const currentMarkdown = current[fileId].markdown.trim()
+    const currentMarkdown = normalizeMarkdownContent(current[fileId].markdown)
 
     if (!(fileId in previous)) {
       if (currentMarkdown === '') {
@@ -110,7 +119,9 @@ export function getChangedFiles(currentSnapshot, lastSyncedSnapshot) {
       continue
     }
 
-    if (current[fileId].markdown !== previous[fileId].markdown && currentMarkdown !== '') {
+    const previousMarkdown = normalizeMarkdownContent(previous[fileId].markdown)
+
+    if (currentMarkdown !== previousMarkdown && currentMarkdown !== '') {
       changedFiles.push({
         fileId,
         fileName: current[fileId].name,
@@ -146,8 +157,8 @@ export function getChangedFiles(currentSnapshot, lastSyncedSnapshot) {
  * @returns {string}  Unified diff text with standard `---`/`+++` headers.
  */
 export function computeFileDiff(oldContent, newContent, filePath) {
-  const safeOldContent = typeof oldContent === 'string' ? oldContent : '';
-  const safeNewContent = typeof newContent === 'string' ? newContent : '';
+  const safeOldContent = normalizeMarkdownContent(oldContent);
+  const safeNewContent = normalizeMarkdownContent(newContent);
   const safePath = typeof filePath === 'string' ? filePath : 'unknown';
 
   return createTwoFilesPatch(
@@ -255,7 +266,10 @@ export function updateSnapshotAfterSync(
   const selectedSet = new Set(safeSelected);
   for (const fileId of selectedSet) {
     if (fileId in safeCurrent) {
-      updatedSnapshot[fileId] = safeCurrent[fileId];
+      updatedSnapshot[fileId] = {
+        ...safeCurrent[fileId],
+        markdown: normalizeMarkdownContent(safeCurrent[fileId].markdown),
+      };
     }
   }
 

@@ -31,11 +31,35 @@ function getStepDescription(status, step) {
     return 'Waiting to begin'
   }
 
+  if (step === REVIEW_STEPS.FINAL_REVIEW) {
+    if (status === 'active') {
+      return 'Confirm grouped changes'
+    }
+
+    if (status === 'completed') {
+      return 'Committed'
+    }
+
+    return 'Waiting for detail reviews'
+  }
+
   if (status === 'active') {
+    if (step === REVIEW_STEPS.EVENTS_INDEX || step === REVIEW_STEPS.ELEMENTS_INDEX) {
+      return 'Check evidence and index rows'
+    }
+
+    if (step === REVIEW_STEPS.ELEMENT_DETAILS || step === REVIEW_STEPS.EVENT_DETAILS) {
+      return 'Compare dossier markdown'
+    }
+
     return 'Approve or request changes'
   }
 
   if (status === 'completed') {
+    if (step === REVIEW_STEPS.ELEMENT_DETAILS || step === REVIEW_STEPS.EVENT_DETAILS) {
+      return 'Resolved'
+    }
+
     return 'Approved and staged'
   }
 
@@ -55,12 +79,15 @@ function buildAttemptLabel(reviewSession) {
 }
 
 function SyncReviewSidebar({ onDiscard, reviewSession }) {
+  const isFinalReviewStep = reviewSession.step === REVIEW_STEPS.FINAL_REVIEW
   const isCompleteStep = reviewSession.step === REVIEW_STEPS.COMPLETE
+  const shouldHideDiscardAction = isFinalReviewStep || isCompleteStep
   const diffPreviewStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.DIFF_PREVIEW)
   const eventsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENTS_INDEX)
   const elementsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENTS_INDEX)
   const elementDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.ELEMENT_DETAILS)
   const eventDetailsStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.EVENT_DETAILS)
+  const finalReviewStepStatus = getReviewStepStatus(reviewSession.step, REVIEW_STEPS.FINAL_REVIEW)
   const completedElementDetails = countResolvedDetailTargets(reviewSession, REVIEW_STEPS.ELEMENT_DETAILS)
   const completedEventDetails = countResolvedDetailTargets(reviewSession, REVIEW_STEPS.EVENT_DETAILS)
   const totalElementDetails = reviewSession.elementDetailTargets?.length ?? 0
@@ -68,7 +95,7 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
 
   return (
     <Stack className="review-sidebar" gap="lg" h="100%" justify="space-between">
-      <Stack gap="lg">
+      <Stack className="review-sidebar-scrollable" gap="lg">
         <Box>
           <Text className="eyebrow">Review Mode</Text>
           <Text className="panel-title review-sidebar-title">World Sync</Text>
@@ -113,27 +140,38 @@ function SyncReviewSidebar({ onDiscard, reviewSession }) {
             description={getStepDescription(eventDetailsStepStatus, REVIEW_STEPS.EVENT_DETAILS)}
             label={buildDetailStepLabel('Event Details', completedEventDetails, totalEventDetails)}
           />
+          <Stepper.Step
+            description={getStepDescription(finalReviewStepStatus, REVIEW_STEPS.FINAL_REVIEW)}
+            label="Final Review"
+          />
         </Stepper>
 
         <Box className="review-sidebar-note">
-          <Text className="review-sidebar-note-title">{isCompleteStep ? 'Sync applied' : 'All-or-nothing sync'}</Text>
+          <Text className="review-sidebar-note-title">
+            {isCompleteStep ? 'Sync applied' : isFinalReviewStep ? 'Ready to commit' : 'All-or-nothing sync'}
+          </Text>
           <Text className="review-sidebar-note-copy">
             {isCompleteStep
               ? 'The review results are now committed. Return to world view from the summary panel to browse the updated model.'
-              : 'Canceling exits review mode, discards staged results, and leaves the current world model untouched.'}
+              : isFinalReviewStep
+                ? 'Review the grouped changes in the main panel and commit when everything looks right.'
+                : 'Canceling exits review mode, discards staged results, and leaves the current world model untouched.'}
           </Text>
         </Box>
       </Stack>
 
-      {!isCompleteStep ? (
-        <Button
-          data-testid="discard-review-button"
-          disabled={reviewSession.isLoading}
-          onClick={onDiscard}
-          variant="default"
-        >
-          Cancel Sync
-        </Button>
+      {!shouldHideDiscardAction ? (
+        <Box className="review-sidebar-footer">
+          <Button
+            data-testid="discard-review-button"
+            disabled={reviewSession.isLoading}
+            fullWidth
+            onClick={onDiscard}
+            variant="default"
+          >
+            Cancel Sync
+          </Button>
+        </Box>
       ) : null}
     </Stack>
   )

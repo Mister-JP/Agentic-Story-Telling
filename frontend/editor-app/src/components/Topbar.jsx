@@ -1,4 +1,4 @@
-import { ActionIcon, Badge, Text } from '@mantine/core'
+import { ActionIcon, Badge, Button, Text } from '@mantine/core'
 import PropTypes from 'prop-types'
 import editIcon from '../assets/icons/edit-2-svgrepo-com.svg'
 import trashIcon from '../assets/icons/trash-delete-svgrepo-com.svg'
@@ -59,6 +59,24 @@ function getReviewHeaderCopy(reviewStep) {
     }
   }
 
+  if (reviewStep === REVIEW_STEPS.ELEMENT_DETAILS) {
+    return {
+      eyebrow: 'Review',
+      breadcrumb: 'World sync',
+      title: 'Element Detail Review',
+      meta: 'Review one element dossier at a time and inspect only the evidence layer you need.',
+    }
+  }
+
+  if (reviewStep === REVIEW_STEPS.EVENT_DETAILS) {
+    return {
+      eyebrow: 'Review',
+      breadcrumb: 'World sync',
+      title: 'Event Detail Review',
+      meta: 'Review one event dossier at a time and inspect only the evidence layer you need.',
+    }
+  }
+
   return {
     eyebrow: 'Review',
     breadcrumb: 'World sync',
@@ -90,6 +108,7 @@ function getStatusLabel(projectAction, selectionMode, selectedNode) {
 
 function Topbar({
   onOpenDialog,
+  onOpenLlmSettings,
   projectAction,
   projectStatus,
   reviewStep,
@@ -148,6 +167,10 @@ function Topbar({
         </div>
 
         <div className="topbar-actions">
+          <Button className="topbar-utility-button" size="xs" variant="default" onClick={onOpenLlmSettings}>
+            Model settings
+          </Button>
+
           <Badge className="topbar-status-pill" variant="light">
             {statusLabel}
           </Badge>
@@ -179,6 +202,7 @@ function Topbar({
 
 Topbar.propTypes = {
   onOpenDialog: PropTypes.func.isRequired,
+  onOpenLlmSettings: PropTypes.func.isRequired,
   projectAction: PropTypes.string,
   projectStatus: PropTypes.shape({
     kind: PropTypes.oneOf(['success', 'error']).isRequired,

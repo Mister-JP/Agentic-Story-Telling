@@ -9,7 +9,9 @@ description = "Agentic world-model harness for fiction writing"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.111,<1.0",
+    "httpx>=0.28",
     "pydantic>=2.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
     "uvicorn>=0.30,<1.0",
 ]
 

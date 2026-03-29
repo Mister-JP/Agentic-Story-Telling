@@ -6,7 +6,7 @@ import logging
 from fastapi.testclient import TestClient
 import pytest
 
-from backend.dependencies import get_harness_service
+from backend.dependencies import get_harness_service, get_runtime_llm_settings_store
 from backend.errors import ApiError
 from backend.main import create_app
 from backend.schemas import (
@@ -17,14 +17,21 @@ from backend.schemas import (
     EventDetailProposeResponse,
     EventFileUpdateProposal,
 )
-from backend.services.harness_service import HarnessService
+from backend.services.harness_service import HarnessService, StubHarnessService
 from backend.services.stub_payloads import build_element_detail_file
 
 
-def build_client(service_override=None, raise_server_exceptions=True) -> TestClient:
+def build_client(
+    service_override=None,
+    raise_server_exceptions=True,
+    *,
+    use_default_dependency: bool = False,
+) -> TestClient:
     application = create_app()
     if service_override is not None:
         application.dependency_overrides[get_harness_service] = lambda: service_override
+    elif not use_default_dependency:
+        application.dependency_overrides[get_harness_service] = lambda: StubHarnessService()
     return TestClient(application, raise_server_exceptions=raise_server_exceptions)
 
 
@@ -38,6 +45,7 @@ def build_events_index_propose_payload() -> dict:
 
 def build_events_index_apply_payload() -> dict:
     return {
+        "diff_text": "--- a/chapter-08.story\n+++ b/chapter-08.story\n+She noticed the altar cloth.",
         "events_md": "# Events",
         "proposal": {
             "scan_summary": "Stub mode summary.",
@@ -66,6 +74,7 @@ def build_elements_index_propose_payload() -> dict:
 
 def build_elements_index_apply_payload() -> dict:
     return {
+        "diff_text": "--- a/chapter-08.story\n+++ b/chapter-08.story\n+The silver key felt colder than before.",
         "elements_md": "# Elements",
         "proposal": {
             "diff_summary": "Stub mode summary.",
@@ -131,6 +140,94 @@ def test_all_stub_routes_return_successful_contract_shapes() -> None:
         assert response_body[response_key] is not None
 
 
+def test_llm_settings_routes_return_and_update_runtime_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_store = get_runtime_llm_settings_store()
+    runtime_store.clear()
+    monkeypatch.setenv("WORLD_MODEL_BACKEND_MODE", "stub")
+    monkeypatch.delenv("WORLD_MODEL_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("WORLD_MODEL_LLM_MODEL", raising=False)
+    monkeypatch.delenv("WORLD_MODEL_LLM_BASE_URL", raising=False)
+    client = build_client()
+
+    try:
+        get_response = client.get("/harness/settings/llm")
+        get_response_body = get_response.json()
+
+        assert get_response.status_code == 200
+        assert get_response_body["backend_mode"] == "stub"
+        assert get_response_body["provider"] == "groq"
+        assert get_response_body["has_api_key"] is False
+
+        update_response = client.post(
+            "/harness/settings/llm",
+            json={
+                "backend_mode": "real",
+                "provider": "gemini",
+                "api_key": "test-gemini-key",
+                "model": "gemini-2.5-flash",
+                "base_url": "",
+                "timeout_seconds": 45,
+                "max_tokens": 4096,
+            },
+        )
+        update_response_body = update_response.json()
+
+        assert update_response.status_code == 200
+        assert update_response_body["backend_mode"] == "real"
+        assert update_response_body["provider"] == "gemini"
+        assert update_response_body["model"] == "gemini-2.5-flash"
+        assert update_response_body["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai"
+        assert update_response_body["timeout_seconds"] == 45
+        assert update_response_body["max_tokens"] == 4096
+        assert update_response_body["has_api_key"] is True
+
+        refreshed_response = client.get("/harness/settings/llm")
+
+        assert refreshed_response.status_code == 200
+        assert refreshed_response.json()["provider"] == "gemini"
+    finally:
+        runtime_store.clear()
+        get_harness_service.cache_clear()
+
+
+def test_elements_index_propose_returns_structured_error_when_real_provider_schema_is_invalid() -> None:
+    class InvalidElementsProposalService:
+        def propose_events_index(self, _request):
+            raise AssertionError("Not used in this test")
+
+        def apply_events_index(self, _request):
+            raise AssertionError("Not used in this test")
+
+        def propose_elements_index(self, _request):
+            raise ApiError(
+                error="llm_error",
+                message="The LLM returned JSON that did not match the schema for the elements index proposal.",
+                status_code=502,
+                retryable=True,
+                details=["Field required"],
+            )
+
+        def apply_elements_index(self, _request):
+            raise AssertionError("Not used in this test")
+
+        def propose_element_detail(self, _request):
+            raise AssertionError("Not used in this test")
+
+        def propose_event_detail(self, _request):
+            raise AssertionError("Not used in this test")
+
+    client = build_client(service_override=InvalidElementsProposalService(), raise_server_exceptions=False)
+
+    response = client.post("/harness/elements-index/propose", json=build_elements_index_propose_payload())
+    response_body = response.json()
+
+    assert response.status_code == 502
+    assert response_body["error"] == "llm_error"
+    assert "did not match the schema" in response_body["message"]
+
+
 def test_events_index_propose_returns_stub_delta_with_diff_evidence() -> None:
     client = build_client()
 
@@ -144,6 +241,23 @@ def test_events_index_propose_returns_stub_delta_with_diff_evidence() -> None:
     assert proposal["scan_summary"] == "Stub mode analyzed the diff and returned a deterministic events proposal."
     assert proposal["deltas"][0]["action"] == "create"
     assert proposal["deltas"][0]["evidence_from_diff"] == ["She noticed the altar cloth."]
+
+
+def test_successful_requests_emit_compact_event_logs(caplog) -> None:
+    client = build_client()
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/harness/events-index/propose",
+            json=build_events_index_propose_payload(),
+            headers={"X-Request-ID": "req-test-123"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "req-test-123"
+    assert any('event="events_index_proposed"' in message for message in caplog.messages)
+    assert any('request_id="req-test-123"' in message for message in caplog.messages)
+    assert any('delta_count=1' in message for message in caplog.messages)
 
 
 def test_cors_preflight_allows_localhost_dev_ports() -> None:
@@ -265,7 +379,7 @@ def test_real_mode_missing_llm_configuration_uses_shared_error_envelope(
     monkeypatch.delenv("WORLD_MODEL_LLM_API_KEY", raising=False)
     monkeypatch.delenv("WORLD_MODEL_LLM_MODEL", raising=False)
     try:
-        client = build_client(raise_server_exceptions=False)
+        client = build_client(raise_server_exceptions=False, use_default_dependency=True)
         response = client.post("/harness/events-index/propose", json=build_events_index_propose_payload())
         response_body = response.json()
 
@@ -563,6 +677,23 @@ def test_detail_routes_use_shared_error_envelope_when_service_fails(endpoint_pat
     assert response_body["error"] == "llm_error"
     assert response_body["message"] == "Upstream detail generation failed."
     assert response_body["retryable"] is True
+
+
+def test_handled_api_errors_are_logged(caplog) -> None:
+    client = build_client(
+        service_override=DetailFailingHarnessService(
+            failure=ApiError("llm_error", "Upstream detail generation failed.", 502, True),
+        ),
+        raise_server_exceptions=False,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/harness/event-detail/propose", json=build_detail_payload("event"))
+
+    assert response.status_code == 502
+    assert any('event="api_error"' in message for message in caplog.messages)
+    assert any('error_code="llm_error"' in message for message in caplog.messages)
+    assert any('path="/harness/event-detail/propose"' in message for message in caplog.messages)
 
 
 def test_unexpected_errors_are_logged(caplog) -> None:

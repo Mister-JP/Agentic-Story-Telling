@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.schemas import EventAgentOutput, EventsIndexProposeRequest
+from backend.schemas import EventAgentOutput, EventsIndexProposeRequest, ElementsIndexProposeRequest, ElementsProposal
 from backend.services.harness_service import normalize_detail_markdown, normalize_layer_content
 
 
@@ -58,3 +58,66 @@ def test_real_harness_service_propose_events_index_delegates_to_provider() -> No
 
     assert response.proposal.scan_summary == "LLM proposal"
     assert provider.request == request
+
+
+def test_real_harness_service_propose_elements_index_delegates_to_provider_with_audit_retry() -> None:
+    from backend.services.harness_service import RealHarnessService
+
+    class RecordingProvider:
+        def __init__(self) -> None:
+            self.requests: list[ElementsIndexProposeRequest] = []
+
+        def propose_elements_index(self, request: ElementsIndexProposeRequest) -> ElementsProposal:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return ElementsProposal(
+                    diff_summary="First pass missed an existing person.",
+                    rationale="Initial draft.",
+                    identified_elements=[],
+                    approval_message="Review the proposal.",
+                )
+
+            return ElementsProposal(
+                diff_summary="Revised proposal includes the existing person.",
+                rationale="Audit feedback incorporated.",
+                identified_elements=[
+                    {
+                        "display_name": "Mira",
+                        "kind": "person",
+                        "aliases": [],
+                        "identification_keys": [],
+                        "snapshot": "Mira is explicitly active in the diff.",
+                        "update_instruction": "Carry the new manuscript evidence for Mira into detail review.",
+                        "evidence_from_diff": ["Mira opens the chapel."],
+                        "matched_existing_display_name": "Mira",
+                        "matched_existing_uuid": "elt_mira123",
+                        "is_new": False,
+                    }
+                ],
+                approval_message="Review the proposal.",
+            )
+
+        def propose_events_index(self, request):  # pragma: no cover - protocol filler
+            raise AssertionError("Not used in this test")
+
+        def propose_element_detail(self, request, prompt_context):  # pragma: no cover - protocol filler
+            raise AssertionError("Not used in this test")
+
+        def propose_event_detail(self, request, prompt_context):  # pragma: no cover - protocol filler
+            raise AssertionError("Not used in this test")
+
+    provider = RecordingProvider()
+    service = RealHarnessService(detail_proposal_provider=provider)
+    request = ElementsIndexProposeRequest(
+        diff_text="+ Mira opens the chapel.",
+        elements_md="# Elements\n\n## Entries\n- person | Mira | elt_mira123 | Mira | protagonist\n",
+        history=[],
+    )
+
+    response = service.propose_elements_index(request)
+
+    assert response.proposal.diff_summary == "Revised proposal includes the existing person."
+    assert len(provider.requests) == 2
+    assert provider.requests[0].history == []
+    assert len(provider.requests[1].history) == 1
+    assert "Coverage gap" in provider.requests[1].history[0].reviewer_feedback

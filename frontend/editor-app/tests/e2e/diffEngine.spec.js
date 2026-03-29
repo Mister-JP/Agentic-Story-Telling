@@ -51,12 +51,12 @@ function buildBaselineSnapshot() {
     'chapter-07': {
       name: 'chapter-07.story',
       path: 'story-structure/chapter-07.story',
-      markdown: 'Chapter 7\n=========\n\nThe rain had stopped by the time she walked to the chapel.',
+      markdown: 'Chapter 7\n=========\n\nThe rain had stopped by the time she walked to the chapel.\n',
     },
     'chapter-08': {
       name: 'chapter-08.story',
       path: 'story-structure/chapter-08.story',
-      markdown: 'Chapter 8\n---------\n\nMorning light filtered through stained glass.',
+      markdown: 'Chapter 8\n---------\n\nMorning light filtered through stained glass.\n',
     },
   };
 }

@@ -138,6 +138,15 @@ function buildEventsApplyResponse(summary) {
 Original event stub detail.
 `,
     },
+    detail_targets: [
+      {
+        uuid: 'evt_stub123',
+        summary,
+        file: 'events/evt_stub123.md',
+        delta_action: 'create',
+        update_context: 'Create the event dossier.',
+      },
+    ],
     events_md: `# Events
 
 ## Entries
@@ -178,6 +187,24 @@ Original cloth bundle stub detail.
 Original lantern stub detail.
 `,
     },
+    detail_targets: [
+      {
+        uuid: 'elt_bundle123',
+        summary: 'Cloth Bundle',
+        file: 'elements/elt_bundle123.md',
+        delta_action: 'create',
+        update_context: 'Create the cloth bundle dossier.',
+        kind: 'item',
+      },
+      {
+        uuid: 'elt_lantern456',
+        summary: 'Lantern',
+        file: 'elements/elt_lantern456.md',
+        delta_action: 'create',
+        update_context: 'Create the lantern dossier.',
+        kind: 'item',
+      },
+    ],
     elements_md: `# Elements
 
 ## Entries
@@ -190,7 +217,7 @@ Original lantern stub detail.
 function buildElementDetailResponse(uuid, summary, detailText) {
   return {
     proposal: {
-      changed: true,
+      file_action: 'update',
       rationale: `Refines the ${summary} file.`,
       approval_message: `Ready to apply ${summary}.`,
     },
@@ -202,7 +229,7 @@ function buildElementDetailResponse(uuid, summary, detailText) {
 function buildEventDetailResponse(detailText, rationale = 'Adds precise causal context.') {
   return {
     proposal: {
-      changed: true,
+      file_action: 'update',
       rationale,
       approval_message: 'Ready to apply the event detail.',
     },
@@ -262,7 +289,7 @@ describe('App review flow', () => {
     vi.unstubAllGlobals()
   })
 
-  it('runs the full index-plus-detail review loop and commits only after the final detail approval', async () => {
+  it('runs the full index-plus-detail review loop and commits only after the final review approval', async () => {
     const user = userEvent.setup()
 
     fetch
@@ -397,6 +424,11 @@ describe('App review flow', () => {
     expect(revisedEventDetailRequest.history[0].previous_output).toContain('Initial event detail attempt.')
 
     await user.click(screen.getByTestId('approve-detail-button'))
+    await screen.findByTestId('final-review-step')
+    expect(screen.getByTestId('final-review-detail-updates')).toHaveTextContent('elements/elt_bundle123.md')
+    expect(screen.getByTestId('final-review-detail-updates')).toHaveTextContent('events/evt_stub123.md')
+
+    await user.click(screen.getByTestId('commit-final-review-button'))
     await screen.findByTestId('sync-complete-step')
 
     expect(screen.getByTestId('sync-complete-events-summary')).toHaveTextContent('1 created')
@@ -446,7 +478,7 @@ describe('App review flow', () => {
     expect(firstRequest.diff_text).not.toContain('story-structure/opening-scene.story')
   })
 
-  it('shows the complete step immediately when no detail targets remain after the index passes', async () => {
+  it('routes delete targets through detail review before the final commit', async () => {
     const user = userEvent.setup()
 
     fetch
@@ -467,8 +499,17 @@ describe('App review flow', () => {
         },
       }))
       .mockResolvedValueOnce(jsonResponse({
-        actions: ['Deleted event evt_old123.'],
+        actions: ['Deleted event evt_old123: Old event.'],
         detail_files: {},
+        detail_targets: [
+          {
+            uuid: 'evt_old123',
+            summary: 'Old event',
+            file: 'events/evt_old123.md',
+            delta_action: 'delete',
+            update_context: 'Delete the unsupported detail file.',
+          },
+        ],
         events_md: '# Events\n\n## Entries\n',
       }))
       .mockResolvedValueOnce(jsonResponse({
@@ -481,8 +522,18 @@ describe('App review flow', () => {
       }))
       .mockResolvedValueOnce(jsonResponse({
         actions: [],
+        detail_targets: [],
         detail_files: {},
         elements_md: '# Elements\n\n## Entries\n',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        proposal: {
+          file_action: 'delete',
+          rationale: 'The event detail is unsupported after the manuscript deletion.',
+          approval_message: 'Delete the detail file.',
+        },
+        preview_diff: '--- a/events/evt_old123.md\n+++ b/events/evt_old123.md\n@@',
+        updated_detail_md: '',
       }))
 
     renderApp()
@@ -491,9 +542,16 @@ describe('App review flow', () => {
     await user.click(screen.getByTestId('approve-events-index-button'))
     await screen.findByTestId('elements-index-review')
     await user.click(screen.getByTestId('approve-elements-index-button'))
+    await screen.findByTestId('event-detail-review')
+    await user.click(screen.getByTestId('approve-detail-button'))
+    await screen.findByTestId('final-review-step')
+    expect(screen.getByTestId('final-review-index-deletes')).toHaveTextContent('Deleted event evt_old123')
+    expect(screen.getByTestId('final-review-detail-deletes')).toHaveTextContent('events/evt_old123.md')
+    await user.click(screen.getByTestId('commit-final-review-button'))
     await screen.findByTestId('sync-complete-step')
 
     expect(screen.getByTestId('sync-complete-events-summary')).toHaveTextContent('1 deleted')
+    expect(screen.getByTestId('sync-complete-event-details-summary')).toHaveTextContent('1 detail pages deleted')
     expect(screen.getByTestId('sync-complete-element-details-summary')).toHaveTextContent('0 detail pages updated')
     expect(screen.queryByTestId('world-panel-stub')).not.toBeInTheDocument()
 
@@ -504,7 +562,7 @@ describe('App review flow', () => {
     })
   })
 
-  it('shows the complete step when the final detail target is skipped', async () => {
+  it('shows the final review step when the final detail target is skipped', async () => {
     const user = userEvent.setup()
 
     fetch
@@ -522,6 +580,7 @@ describe('App review flow', () => {
       }))
       .mockResolvedValueOnce(jsonResponse({
         actions: [],
+        detail_targets: [],
         detail_files: {},
         elements_md: '# Elements\n\n## Entries\n',
       }))
@@ -540,6 +599,8 @@ describe('App review flow', () => {
     await user.click(screen.getByTestId('approve-elements-index-button'))
     await screen.findByTestId('event-detail-review')
     await user.click(screen.getByTestId('skip-detail-button'))
+    await screen.findByTestId('final-review-step')
+    await user.click(screen.getByTestId('commit-final-review-button'))
     await screen.findByTestId('sync-complete-step')
 
     expect(screen.getByTestId('sync-complete-event-details-summary')).toHaveTextContent('0 detail pages updated')
@@ -552,7 +613,7 @@ describe('App review flow', () => {
     })
   })
 
-  it('shows the no-change message during detail review when the backend returns changed=false', async () => {
+  it('shows the no-change message during detail review when the backend returns file_action=no_change', async () => {
     const user = userEvent.setup()
 
     fetch
@@ -598,6 +659,16 @@ describe('App review flow', () => {
         status: 200,
         json: vi.fn().mockResolvedValue({
           actions: ['Created element elt_bundle123: Cloth Bundle (item).'],
+          detail_targets: [
+            {
+              uuid: 'elt_bundle123',
+              summary: 'Cloth Bundle',
+              file: 'elements/elt_bundle123.md',
+              delta_action: 'create',
+              update_context: 'Create the cloth bundle dossier.',
+              kind: 'item',
+            },
+          ],
           detail_files: {
             elt_bundle123: '# Cloth Bundle\n\n## Core Understanding\nOriginal cloth bundle stub detail.\n',
           },
@@ -609,7 +680,7 @@ describe('App review flow', () => {
         status: 200,
         json: vi.fn().mockResolvedValue({
           proposal: {
-            changed: false,
+            file_action: 'no_change',
             rationale: 'Nothing in the diff changes the file-level dossier.',
             approval_message: 'No changes needed.',
           },

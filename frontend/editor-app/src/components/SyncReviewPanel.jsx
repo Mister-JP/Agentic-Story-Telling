@@ -2,6 +2,7 @@ import { Box, Button, Loader, Stack, Text } from '@mantine/core'
 import PropTypes from 'prop-types'
 import DetailReviewStep from './DetailReviewStep.jsx'
 import DiffPreviewStep from './DiffPreviewStep.jsx'
+import FinalReviewStep from './FinalReviewStep.jsx'
 import IndexReviewStep from './IndexReviewStep.jsx'
 import SyncCompleteStep from './SyncCompleteStep.jsx'
 import {
@@ -87,6 +88,7 @@ function SyncReviewPanel({
   onApprove,
   onComplete,
   onContinue,
+  onDiscard,
   onRequestChanges,
   onSelectionChange,
   onRetry,
@@ -101,11 +103,23 @@ function SyncReviewPanel({
     return <SyncCompleteStep onComplete={onComplete} reviewSession={reviewSession} />
   }
 
+  if (reviewSession.step === REVIEW_STEPS.FINAL_REVIEW) {
+    return (
+      <FinalReviewStep
+        error={reviewSession.error}
+        finalReviewGroups={reviewSession.finalReviewGroups}
+        isLoading={reviewSession.isLoading}
+        onApprove={onApprove}
+      />
+    )
+  }
+
   if (reviewSession.step === REVIEW_STEPS.DIFF_PREVIEW) {
     return (
       <DiffPreviewStep
         changedFiles={reviewSession.changedFiles}
         onContinue={onContinue}
+        onDiscard={onDiscard}
         onSelectionChange={onSelectionChange}
         selectedFileIds={reviewSession.selectedFileIds}
       />
@@ -128,18 +142,21 @@ function SyncReviewPanel({
     return (
       <DetailReviewStep
         attemptNumber={reviewSession.attemptNumber}
+        currentDetailMd={reviewSession.currentDetailMd ?? ''}
         currentDetailIndex={reviewSession.currentDetailIndex}
         currentTarget={reviewSession.detailTargets[reviewSession.currentDetailIndex]}
         error={reviewSession.error}
         isLoading={reviewSession.isLoading}
         loadingAction={reviewSession.loadingAction}
         onApprove={onApprove}
+        onDiscard={onDiscard}
         onRequestChanges={onRequestChanges}
         onSkip={onSkip}
         previewDiff={reviewSession.currentPreviewDiff ?? ''}
         proposal={reviewSession.currentProposal}
         step={reviewSession.step}
         totalTargets={reviewSession.detailTargets.length}
+        updatedDetailMd={reviewSession.currentUpdatedDetailMd ?? ''}
       />
     )
   }
@@ -155,7 +172,9 @@ function SyncReviewPanel({
       isLoading={reviewSession.isLoading}
       loadingAction={reviewSession.loadingAction}
       onApprove={onApprove}
+      onDiscard={onDiscard}
       onRequestChanges={onRequestChanges}
+      currentIndexMd={reviewSession.step === REVIEW_STEPS.ELEMENTS_INDEX ? reviewSession.elementsMd : reviewSession.eventsMd}
       proposal={reviewSession.currentProposal}
       step={reviewSession.step}
     />
@@ -166,6 +185,7 @@ SyncReviewPanel.propTypes = {
   onApprove: PropTypes.func.isRequired,
   onComplete: PropTypes.func.isRequired,
   onContinue: PropTypes.func.isRequired,
+  onDiscard: PropTypes.func.isRequired,
   onRequestChanges: PropTypes.func.isRequired,
   onSelectionChange: PropTypes.func.isRequired,
   onRetry: PropTypes.func.isRequired,
@@ -173,14 +193,19 @@ SyncReviewPanel.propTypes = {
   reviewSession: PropTypes.shape({
     attemptNumber: PropTypes.number,
     changedFiles: PropTypes.array,
+    currentDetailMd: PropTypes.string,
     completedSyncAt: PropTypes.string,
     currentDetailIndex: PropTypes.number,
     currentPreviewDiff: PropTypes.string,
     currentProposal: PropTypes.object,
+    currentUpdatedDetailMd: PropTypes.string,
     detailTargets: PropTypes.array,
+    elementsMd: PropTypes.string,
     error: PropTypes.string,
+    eventsMd: PropTypes.string,
     isLoading: PropTypes.bool,
     loadingAction: PropTypes.oneOf(['approve', 'proposal', 'request-changes', 'skip']),
+    finalReviewGroups: PropTypes.object,
     selectedFileIds: PropTypes.array,
     step: PropTypes.oneOf(REVIEW_STEP_VALUES),
   }),

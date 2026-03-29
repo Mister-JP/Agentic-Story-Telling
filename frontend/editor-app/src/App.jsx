@@ -2,6 +2,7 @@ import { Box, Flex, useTree } from '@mantine/core'
 import { useLocalStorage } from '@mantine/hooks'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import EditorPane from './components/EditorPane.jsx'
+import LlmSettingsDialog from './components/LlmSettingsDialog.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import SyncReviewPanel from './components/SyncReviewPanel.jsx'
 import Topbar from './components/Topbar.jsx'
@@ -10,10 +11,12 @@ import {
   ApiClientError,
   applyElementsIndex,
   applyEventsIndex,
+  getLlmSettings,
   proposeElementDetail,
   proposeElementsIndex,
   proposeEventDetail,
   proposeEventsIndex,
+  updateLlmSettings,
 } from './utils/agentApi.js'
 import {
   applyCompletedSyncReviewResult,
@@ -23,6 +26,7 @@ import {
   buildEventDetailTargets,
   createDetailReviewSession,
   createElementsIndexReviewSession,
+  createFinalReviewSession,
   createIndexReviewSession,
   createReviewHistoryEntry,
   createReviewIterationState,
@@ -63,6 +67,7 @@ import {
   importProjectZip,
   isProjectArchiveAbortError,
 } from './utils/projectArchive.js'
+import { getReviewFixture } from './utils/reviewFixtures.js'
 
 const DEFAULT_EXPANDED_STATE = {
   [ROOT_ID]: true,
@@ -115,6 +120,10 @@ const INITIAL_SYNC_STATE = {
 }
 
 function App() {
+  const reviewFixture = useMemo(
+    () => getReviewFixture(globalThis.location?.search ?? ''),
+    [],
+  )
   const [workspace, setWorkspace] = useLocalStorage({
     key: 'editor-app-workspace-v1',
     defaultValue: initialTree,
@@ -130,7 +139,7 @@ function App() {
     defaultValue: INITIAL_SYNC_STATE,
   })
   const [isWorldSyncLoading, setIsWorldSyncLoading] = useState(false)
-  const [reviewSession, setReviewSession] = useState(null)
+  const [reviewSession, setReviewSession] = useState(reviewFixture)
   const reviewGenerationRef = useRef(0)
   const reviewActionLockRef = useRef(null)
   const workspaceRef = useRef(workspace)
@@ -151,7 +160,7 @@ function App() {
     () => getWorldSyncButtonState(workspace, syncState, isWorldSyncLoading),
     [workspace, syncState, isWorldSyncLoading],
   )
-  const [viewMode, setViewMode] = useState('write')
+  const [viewMode, setViewMode] = useState(reviewFixture ? 'review' : 'write')
   const [worldSelection, setWorldSelection] = useState(null)
 
   const handleViewModeChange = useCallback((nextMode) => {
@@ -172,6 +181,11 @@ function App() {
   const [dialogError, setDialogError] = useState('')
   const [projectAction, setProjectAction] = useState(null)
   const [projectStatus, setProjectStatus] = useState(null)
+  const [isLlmSettingsOpen, setIsLlmSettingsOpen] = useState(false)
+  const [llmSettings, setLlmSettings] = useState(null)
+  const [llmSettingsError, setLlmSettingsError] = useState('')
+  const [isLlmSettingsLoading, setIsLlmSettingsLoading] = useState(false)
+  const [isLlmSettingsSaving, setIsLlmSettingsSaving] = useState(false)
 
   const tree = useTree({
     initialExpandedState: DEFAULT_EXPANDED_STATE,
@@ -420,6 +434,7 @@ function App() {
   const requestIndexProposalForStep = useCallback(async ({ elementsMd, eventsMd, diffText, history, step }) => {
     if (step === REVIEW_STEPS.ELEMENTS_INDEX) {
       return proposeElementsIndex({
+        current_detail_files: worldModelRef.current?.elements?.details ?? {},
         diff_text: diffText,
         elements_md: elementsMd,
         history,
@@ -427,6 +442,7 @@ function App() {
     }
 
     return proposeEventsIndex({
+      current_detail_files: worldModelRef.current?.events?.details ?? {},
       diff_text: diffText,
       events_md: eventsMd,
       history,
@@ -496,10 +512,14 @@ function App() {
     }
 
     const isDetailStep = isDetailReviewStep(sessionBase.step)
+    const currentDetailMd = isDetailStep
+      ? buildCurrentDetailMarkdown(sessionBase, worldModelRef.current)
+      : ''
 
     return {
       ...sessionBase,
       attemptNumber: getReviewAttemptNumber(history, sessionBase.historyBaseCount),
+      currentDetailMd,
       currentPreviewDiff: isDetailStep ? (response.preview_diff ?? '') : '',
       currentProposal: response.proposal,
       currentUpdatedDetailMd: isDetailStep ? (response.updated_detail_md ?? '') : '',
@@ -842,7 +862,7 @@ function App() {
     const activeReviewSession = reviewSessionRef.current
     const actionName = 'approve-review'
 
-    if (!activeReviewSession?.currentProposal || !tryLockReviewAction(actionName)) {
+    if (!activeReviewSession || !tryLockReviewAction(actionName)) {
       return
     }
 
@@ -863,8 +883,30 @@ function App() {
     reviewGenerationRef.current = reviewGeneration
 
     try {
+      if (activeReviewSession.step === REVIEW_STEPS.FINAL_REVIEW) {
+        const appliedReview = applyCompletedSyncReviewResult({
+          currentSyncState: syncStateRef.current,
+          currentWorldModel: worldModelRef.current,
+          reviewSession: activeReviewSession,
+          workspace: workspaceRef.current,
+        })
+
+        if (reviewGenerationRef.current !== reviewGeneration) {
+          return
+        }
+
+        showCompletedReviewScreen(activeReviewSession, appliedReview)
+        return
+      }
+
+      if (!activeReviewSession.currentProposal) {
+        return
+      }
+
       if (activeReviewSession.step === REVIEW_STEPS.ELEMENTS_INDEX) {
         const applyResponse = await applyElementsIndex({
+          current_detail_files: worldModelRef.current?.elements?.details ?? {},
+          diff_text: activeReviewSession.diffText,
           elements_md: activeReviewSession.elementsMd,
           proposal: activeReviewSession.currentProposal,
         })
@@ -895,14 +937,7 @@ function App() {
           : (activeReviewSession.eventDetailTargets ?? [])
 
         if (nextTargets.length === 0) {
-          const appliedReview = applyCompletedSyncReviewResult({
-            currentSyncState: syncStateRef.current,
-            currentWorldModel: worldModelRef.current,
-            reviewSession: baseSession,
-            workspace: workspaceRef.current,
-          })
-
-          showCompletedReviewScreen(baseSession, appliedReview)
+          setReviewSession(createFinalReviewSession(baseSession))
           return
         }
 
@@ -925,6 +960,8 @@ function App() {
 
       if (activeReviewSession.step === REVIEW_STEPS.EVENTS_INDEX) {
         const eventsApplyResponse = await applyEventsIndex({
+          current_detail_files: worldModelRef.current?.events?.details ?? {},
+          diff_text: activeReviewSession.diffText,
           events_md: activeReviewSession.eventsMd,
           proposal: activeReviewSession.currentProposal,
         })
@@ -965,6 +1002,8 @@ function App() {
         ...(activeReviewSession.detailResults ?? {}),
         [currentTarget.uuid]: {
           action: 'approved',
+          fileAction: activeReviewSession.currentProposal.file_action ?? 'no_change',
+          retentionReason: activeReviewSession.currentProposal.retention_reason ?? '',
           targetType: activeReviewSession.step === REVIEW_STEPS.ELEMENT_DETAILS ? 'element' : 'event',
           updatedMd: activeReviewSession.currentUpdatedDetailMd,
         },
@@ -972,18 +1011,11 @@ function App() {
       const nextDetailReview = buildNextDetailReviewSession(activeReviewSession, nextDetailResults)
 
       if (nextDetailReview.type === 'complete') {
-        const appliedReview = applyCompletedSyncReviewResult({
-          currentSyncState: syncStateRef.current,
-          currentWorldModel: worldModelRef.current,
-          reviewSession: nextDetailReview.session,
-          workspace: workspaceRef.current,
-        })
-
         if (reviewGenerationRef.current !== reviewGeneration) {
           return
         }
 
-        showCompletedReviewScreen(nextDetailReview.session, appliedReview)
+        setReviewSession(createFinalReviewSession(nextDetailReview.session))
         return
       }
 
@@ -1071,18 +1103,11 @@ function App() {
       const nextDetailReview = buildNextDetailReviewSession(activeReviewSession, nextDetailResults)
 
       if (nextDetailReview.type === 'complete') {
-        const appliedReview = applyCompletedSyncReviewResult({
-          currentSyncState: syncStateRef.current,
-          currentWorldModel: worldModelRef.current,
-          reviewSession: nextDetailReview.session,
-          workspace: workspaceRef.current,
-        })
-
         if (reviewGenerationRef.current !== reviewGeneration) {
           return
         }
 
-        showCompletedReviewScreen(nextDetailReview.session, appliedReview)
+        setReviewSession(createFinalReviewSession(nextDetailReview.session))
         return
       }
 
@@ -1125,7 +1150,6 @@ function App() {
     buildNextDetailReviewSession,
     releaseReviewAction,
     requestReviewProposalForSession,
-    showCompletedReviewScreen,
     tryLockReviewAction,
   ])
 
@@ -1264,6 +1288,55 @@ function App() {
     }
   }
 
+  const loadLlmSettings = useCallback(async () => {
+    setIsLlmSettingsLoading(true)
+    setLlmSettingsError('')
+
+    try {
+      const nextSettings = await getLlmSettings()
+      setLlmSettings(nextSettings)
+    } catch (error) {
+      console.error(error)
+      setLlmSettingsError(error.message || 'Failed to load backend model settings.')
+    } finally {
+      setIsLlmSettingsLoading(false)
+    }
+  }, [])
+
+  const handleOpenLlmSettings = useCallback(async () => {
+    setIsLlmSettingsOpen(true)
+    await loadLlmSettings()
+  }, [loadLlmSettings])
+
+  const handleCloseLlmSettings = useCallback(() => {
+    if (isLlmSettingsSaving) {
+      return
+    }
+
+    setIsLlmSettingsOpen(false)
+    setLlmSettingsError('')
+  }, [isLlmSettingsSaving])
+
+  const handleSaveLlmSettings = useCallback(async (nextSettingsDraft) => {
+    setIsLlmSettingsSaving(true)
+    setLlmSettingsError('')
+
+    try {
+      const savedSettings = await updateLlmSettings(nextSettingsDraft)
+      setLlmSettings(savedSettings)
+      setIsLlmSettingsOpen(false)
+      setProjectStatus({
+        kind: 'success',
+        message: `Saved ${savedSettings.provider} model settings to backend memory.`,
+      })
+    } catch (error) {
+      console.error(error)
+      setLlmSettingsError(error.message || 'Failed to save backend model settings.')
+    } finally {
+      setIsLlmSettingsSaving(false)
+    }
+  }, [])
+
   return (
     <Box className="app-frame">
       <Flex className="app-shell">
@@ -1300,6 +1373,7 @@ function App() {
             selectedNode={selectedNode}
             syncBadgeProps={syncBadgeProps}
             onOpenDialog={openDialog}
+            onOpenLlmSettings={handleOpenLlmSettings}
             viewMode={viewMode}
           />
 
@@ -1327,6 +1401,7 @@ function App() {
               onApprove={handleApproveReview}
               onComplete={handleCompleteReview}
               onContinue={handleContinueWorldSync}
+              onDiscard={handleRequestDiscardReview}
               onRequestChanges={handleRequestReviewChanges}
               onSelectionChange={handleReviewSelectionChange}
               onRetry={handleRetryReview}
@@ -1354,6 +1429,17 @@ function App() {
         onConfirmSyncFirst={handleConfirmSyncFirst}
         onDraftNameChange={handleDialogDraftNameChange}
         onSubmit={handleDialogSubmit}
+      />
+
+      <LlmSettingsDialog
+        error={llmSettingsError}
+        isLoading={isLlmSettingsLoading}
+        isSaving={isLlmSettingsSaving}
+        opened={isLlmSettingsOpen}
+        settings={llmSettings}
+        onClose={handleCloseLlmSettings}
+        onRefresh={loadLlmSettings}
+        onSave={handleSaveLlmSettings}
       />
     </Box>
   )

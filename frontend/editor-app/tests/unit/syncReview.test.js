@@ -237,7 +237,7 @@ describe('syncReview helpers', () => {
       'chapter-07': {
         name: 'chapter-07.story',
         path: 'story-structure/chapter-07.story',
-        markdown: '# Chapter 7\n\nThe rain had stopped by the time she walked to the chapel.',
+        markdown: '# Chapter 7\n\nThe rain had stopped by the time she walked to the chapel.\n',
       },
     })
   })
@@ -334,6 +334,7 @@ describe('syncReview helpers', () => {
         file: 'events/evt_stub123.md',
         delta_action: 'create',
         update_context: 'Create the event dossier.',
+        provenance_summary: '',
       },
     ])
   })
@@ -371,6 +372,7 @@ describe('syncReview helpers', () => {
         delta_action: 'create',
         update_context: 'Create the detail dossier.',
         kind: 'item',
+        provenance_summary: '',
       },
     ])
   })
@@ -433,18 +435,34 @@ describe('syncReview helpers', () => {
   it('builds sync summary counts from index actions and detailResults', () => {
     expect(buildSyncReviewSummary({
       detailResults: {
-        elt_stub123: { action: 'approved', updatedMd: '# Approved detail' },
+        elt_stub123: { action: 'approved', fileAction: 'update', updatedMd: '# Approved detail' },
         detail_custom_elt: { action: 'skipped', targetType: 'element' },
         evt_stub123: { action: 'skipped' },
-        detail_custom_evt: { action: 'approved', targetType: 'event', updatedMd: '# Approved event detail' },
+        detail_custom_evt: { action: 'approved', fileAction: 'delete', targetType: 'event', updatedMd: '' },
       },
       elementDetailTargets: [
-        { uuid: 'elt_stub123' },
-        { uuid: 'detail_custom_elt' },
+        {
+          uuid: 'elt_stub123',
+          file: 'elements/elt_stub123.md',
+          update_context: 'Create the detail dossier.',
+        },
+        {
+          uuid: 'detail_custom_elt',
+          file: 'elements/detail_custom_elt.md',
+          update_context: 'No changes needed.',
+        },
       ],
       eventDetailTargets: [
-        { uuid: 'evt_stub123' },
-        { uuid: 'detail_custom_evt' },
+        {
+          uuid: 'evt_stub123',
+          file: 'events/evt_stub123.md',
+          update_context: 'Keep the event detail as-is.',
+        },
+        {
+          uuid: 'detail_custom_evt',
+          file: 'events/detail_custom_evt.md',
+          update_context: 'Delete the unsupported event detail.',
+        },
       ],
       updatedEventsState: {
         actions: [
@@ -479,6 +497,18 @@ describe('syncReview helpers', () => {
         createdCount: 1,
         deletedCount: 1,
         updatedCount: 1,
+      },
+      finalReview: {
+        detailDeletes: ['events/detail_custom_evt.md — Delete the unsupported event detail.'],
+        detailUpdates: ['elements/elt_stub123.md — Create the detail dossier.'],
+        indexDeletes: ['Deleted event evt_old789.'],
+        indexMutations: [
+          'Created event evt_stub123: Chapel arrival.',
+          'Updated event evt_existing456: Procession begins.',
+          'Created element elt_stub123: Cloth Bundle (item).',
+          'Updated element elt_existing456: Mira — merged aliases.',
+        ],
+        retainedNoChange: [],
       },
     })
   })

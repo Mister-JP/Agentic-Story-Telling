@@ -11,6 +11,7 @@ function renderPanel(reviewSession, handlers = {}) {
         onApprove={vi.fn()}
         onComplete={vi.fn()}
         onContinue={vi.fn()}
+        onDiscard={vi.fn()}
         onRequestChanges={vi.fn()}
         onSelectionChange={vi.fn()}
         onRetry={vi.fn()}
@@ -67,6 +68,7 @@ describe('SyncReviewPanel', () => {
 
     expect(screen.getByTestId('diff-preview-review')).toBeInTheDocument()
     expect(screen.getByTestId('continue-diff-preview-button')).toBeEnabled()
+    expect(screen.getByTestId('cancel-review-inline-button')).toBeInTheDocument()
     expect(screen.getByTestId('diff-preview-file-checkbox-chapter-07')).toBeChecked()
   })
 
@@ -101,6 +103,7 @@ describe('SyncReviewPanel', () => {
         diff_summary: 'This should not render',
         deltas: [],
       },
+      eventsMd: '# Events\n\n## Entries\n- evt_existing123 | June 20, 1998 | Chapter 7 | Prior chapel visit\n',
       error: null,
       isLoading: false,
       loadingAction: null,
@@ -136,6 +139,7 @@ describe('SyncReviewPanel', () => {
         ],
         approval_message: 'Review the proposal.',
       },
+      elementsMd: '# Elements\n\n## Entries\n- item | Existing Lantern | elt_existing123 | lantern | chapel light\n',
       error: null,
       isLoading: false,
       loadingAction: null,
@@ -147,6 +151,8 @@ describe('SyncReviewPanel', () => {
     expect(screen.getByText('Diff Summary')).toBeInTheDocument()
     expect(screen.getByText('Deterministic summary')).toBeInTheDocument()
     expect(screen.getByText('Deterministic rationale')).toBeInTheDocument()
+    expect(screen.getByText('Focus on one record at a time.')).toBeInTheDocument()
+    expect(screen.getByTestId('cancel-review-inline-button')).toBeInTheDocument()
     expect(screen.queryByText('AI Scan Summary')).not.toBeInTheDocument()
   })
 
@@ -187,15 +193,37 @@ describe('SyncReviewPanel', () => {
     expect(screen.queryByTestId('element-decision-card')).not.toBeInTheDocument()
   })
 
-  it('renders the detail review state for element detail targets', () => {
+  it('renders the detail review state for element detail targets', async () => {
+    const user = userEvent.setup()
+
     renderPanel({
       attemptNumber: 2,
+      currentDetailMd: `# Mira
+
+## Identification
+- UUID: elt_mira123
+- Type: person
+
+## Core Understanding
+Current dossier copy.
+`,
       currentDetailIndex: 1,
       currentPreviewDiff: '--- a/elements/elt_stub123.md\n+++ b/elements/elt_stub123.md',
       currentProposal: {
-        changed: true,
+        chronology_blocks_to_add: [],
+        file_action: 'update',
+        open_threads_to_add: ['A new loose end.'],
         rationale: 'Adds a chronology entry.',
       },
+      currentUpdatedDetailMd: `# Mira
+
+## Identification
+- UUID: elt_mira123
+- Type: person
+
+## Core Understanding
+Revised dossier copy.
+`,
       detailTargets: [
         {
           uuid: 'elt_stub123',
@@ -220,18 +248,46 @@ describe('SyncReviewPanel', () => {
 
     expect(screen.getByTestId('element-detail-review')).toBeInTheDocument()
     expect(screen.getByTestId('detail-review-progress')).toHaveTextContent('2 of 2')
+    expect(screen.getByTestId('cancel-review-inline-button')).toBeInTheDocument()
+    expect(screen.getByText('Change Summary')).toBeInTheDocument()
+    expect(screen.getByText('Open Threads')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Proposed Dossier' }))
+
+    expect(screen.getByTestId('detail-proposed-markdown')).toBeInTheDocument()
+    expect(screen.getByText('Revised dossier copy.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Raw Diff' }))
+
     expect(screen.getByTestId('detail-diff-viewer')).toBeInTheDocument()
   })
 
   it('shows a no-change message instead of a blank diff for detail review', () => {
     renderPanel({
       attemptNumber: 1,
+      currentDetailMd: `# Chapel arrival
+
+## Identification
+- UUID: evt_stub123
+
+## Core Understanding
+No change required.
+`,
       currentDetailIndex: 0,
       currentPreviewDiff: '',
       currentProposal: {
-        changed: false,
+        file_action: 'no_change',
         rationale: 'Nothing in the diff affects this file.',
+        retention_reason: 'Existing grounding is still correct.',
       },
+      currentUpdatedDetailMd: `# Chapel arrival
+
+## Identification
+- UUID: evt_stub123
+
+## Core Understanding
+No change required.
+`,
       detailTargets: [
         {
           uuid: 'evt_stub123',
@@ -248,18 +304,24 @@ describe('SyncReviewPanel', () => {
     })
 
     expect(screen.getByTestId('event-detail-review')).toBeInTheDocument()
-    expect(screen.getByTestId('detail-no-change-message')).toBeInTheDocument()
+    expect(screen.getByText('Decision Summary')).toBeInTheDocument()
+    expect(screen.getByText('Keep dossier')).toBeInTheDocument()
   })
 
-  it('shows a warning when the backend reports changes but the preview diff is empty', () => {
+  it('shows a warning when the backend reports changes but the preview diff is empty', async () => {
+    const user = userEvent.setup()
+
     renderPanel({
       attemptNumber: 1,
+      currentDetailMd: '# Chapel arrival',
       currentDetailIndex: 0,
       currentPreviewDiff: '   ',
       currentProposal: {
-        changed: true,
+        consequences_to_add: ['A new consequence.'],
+        file_action: 'update',
         rationale: 'The generated markdown changed shape even though the diff is blank.',
       },
+      currentUpdatedDetailMd: '# Chapel arrival\n\n## Core Understanding\nUpdated.',
       detailTargets: [
         {
           uuid: 'evt_stub123',
@@ -275,6 +337,8 @@ describe('SyncReviewPanel', () => {
       step: 'event-details',
     })
 
+    await user.click(screen.getByRole('tab', { name: 'Raw Diff' }))
+
     expect(screen.getByTestId('detail-empty-diff-warning-title')).toBeInTheDocument()
     expect(screen.queryByTestId('detail-no-change-message')).not.toBeInTheDocument()
   })
@@ -286,16 +350,16 @@ describe('SyncReviewPanel', () => {
     renderPanel({
       completedSyncAt: '2026-03-25T14:30:00.000Z',
       detailResults: {
-        elt_bundle123: { action: 'approved', updatedMd: '# Approved cloth bundle detail' },
+        elt_bundle123: { action: 'approved', fileAction: 'update', updatedMd: '# Approved cloth bundle detail' },
         elt_lantern456: { action: 'skipped' },
-        evt_stub123: { action: 'approved', updatedMd: '# Approved event detail' },
+        evt_stub123: { action: 'approved', fileAction: 'update', updatedMd: '# Approved event detail' },
       },
       elementDetailTargets: [
-        { uuid: 'elt_bundle123' },
-        { uuid: 'elt_lantern456' },
+        { file: 'elements/elt_bundle123.md', update_context: 'Create the cloth bundle dossier.', uuid: 'elt_bundle123' },
+        { file: 'elements/elt_lantern456.md', update_context: 'Leave the lantern unchanged.', uuid: 'elt_lantern456' },
       ],
       eventDetailTargets: [
-        { uuid: 'evt_stub123' },
+        { file: 'events/evt_stub123.md', update_context: 'Refine the event detail.', uuid: 'evt_stub123' },
       ],
       step: 'complete',
       updatedElementsState: {
@@ -319,5 +383,24 @@ describe('SyncReviewPanel', () => {
 
     await user.click(screen.getByTestId('return-to-world-view-button'))
     expect(onComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the final review step before commit', () => {
+    renderPanel({
+      error: null,
+      finalReviewGroups: {
+        indexMutations: ['Created element elt_bundle123: Cloth Bundle (item).'],
+        indexDeletes: ['Deleted event evt_old123: Old event.'],
+        detailUpdates: ['elements/elt_bundle123.md — Create the cloth bundle dossier.'],
+        detailDeletes: ['events/evt_old123.md — Remove the unsupported detail file.'],
+        retainedNoChange: ['elements/elt_mira123.md — Support still exists in another chapter.'],
+      },
+      isLoading: false,
+      step: 'final-review',
+    })
+
+    expect(screen.getByTestId('final-review-step')).toBeInTheDocument()
+    expect(screen.getByTestId('commit-final-review-button')).toBeEnabled()
+    expect(screen.getByTestId('final-review-detail-deletes')).toHaveTextContent('events/evt_old123.md')
   })
 })
